@@ -1,0 +1,6 @@
+{
+  "name": "智能资产盘点工具",
+  "description": "提供扫码核查、AI OCR 识别、多用户权限管理及审计日志的专业资产管理工具。",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}
