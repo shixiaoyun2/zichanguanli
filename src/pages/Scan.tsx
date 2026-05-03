@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { useNavigate } from 'react-router-dom';
-import { Scan, X, AlertCircle, Search, Plus, Settings, Check } from 'lucide-react';
+import { Scan, X, AlertCircle, Search, Plus, Settings, Check, Zap, ZapOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -13,7 +13,7 @@ interface ScannerSettings {
 
 const DEFAULT_SETTINGS: ScannerSettings = {
   formats: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.QR_CODE],
-  engine: 'default'
+  engine: 'native'
 };
 
 const SUPPORTED_FORMATS_OPTIONS = [
@@ -28,11 +28,14 @@ const SUPPORTED_FORMATS_OPTIONS = [
 export default function ScanPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [error, setError] = useState('');
-  const [isScanning, setIsScanning] = useState(true);
+  const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchEnabled, setTorchEnabled] = useState(false);
   
   const [settings, setSettings] = useState<ScannerSettings>(() => {
     const saved = localStorage.getItem('scanner_settings');
@@ -46,115 +49,155 @@ export default function ScanPage() {
     return DEFAULT_SETTINGS;
   });
 
+  const scannerRef = useRef<Html5Qrcode | null>(null);
   const isMounted = useRef(true);
-  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const isTransitioning = useRef(false);
+
+  const stopScanner = useCallback(async () => {
+    if (isTransitioning.current) return;
+    if (scannerRef.current && (scannerRef.current as any).isScanning) {
+      isTransitioning.current = true;
+      try {
+        await scannerRef.current.stop();
+        setTorchEnabled(false);
+      } catch (e) {
+        console.warn("Soft failed to stop scanner (likely already stopping):", e);
+      } finally {
+        isTransitioning.current = false;
+      }
+    }
+  }, []);
+
+  const startScanner = useCallback(async () => {
+    if (!isMounted.current || isTransitioning.current) return;
+    
+    // 1. 环境安全检查 (Camera requires HTTPS or localhost)
+    if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+      setError("扫码功能需要 HTTPS 环境。请确保您的网站已配置 SSL 证书，或在本地使用 localhost 访问。");
+      return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError("您的浏览器不支持或禁用了摄像头访问 API。");
+      return;
+    }
+
+    isTransitioning.current = true;
+    
+    try {
+      // 1. Ensure any existing scanner is physically stopped
+      if (scannerRef.current && (scannerRef.current as any).isScanning) {
+        await scannerRef.current.stop();
+      }
+
+      // 2. Clear container to prevent DOM conflicts
+      const container = document.getElementById('reader');
+      if (container) container.innerHTML = ""; 
+
+      // 3. Clear state
+      setIsScanning(true);
+      setError(null);
+      setNotFound(false);
+      setScanResult(null);
+
+      // 4. New instance if needed
+      if (!scannerRef.current) {
+        scannerRef.current = new Html5Qrcode("reader");
+      }
+
+      await scannerRef.current.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+          aspectRatio: 1.0,
+          formatsToSupport: settings.formats.length > 0 ? settings.formats : undefined,
+          useBarCodeDetectorIfSupported: settings.engine === 'native'
+        },
+        async (decodedText) => {
+          // Success case
+          if (scannerRef.current && (scannerRef.current as any).isScanning) {
+            await scannerRef.current.stop();
+          }
+          if (isMounted.current) {
+            setScanResult(decodedText);
+            setIsScanning(false);
+            checkAsset(decodedText);
+          }
+        },
+        () => { /* ignore silent failure during scan */ }
+      );
+
+      // Check torch support
+      try {
+        const caps = scannerRef.current.getRunningTrackCapabilities();
+        if (caps && (caps as any).torch) {
+          setTorchSupported(true);
+        } else {
+          setTorchSupported(false);
+        }
+      } catch (e) {
+        setTorchSupported(false);
+      }
+
+    } catch (err: any) {
+      console.error("Scanner start error:", err);
+      const errMsg = err?.toString() || "";
+      if (errMsg.includes("NotAllowedError")) {
+         setError("摄像头权限被拒绝，请检查浏览器权限设置。");
+      } else if (errMsg.includes("NotFoundError")) {
+         setError("未找到摄像头设备，请确保已连接。");
+      } else if (errMsg.includes("NotSupportedError") || errMsg.includes("not supported")) {
+         setError("浏览器版本过低或处于不安全环境（需要 HTTPS）。");
+      } else {
+         setError("启动失败。请刷新重试或检查摄像头是否被占用。");
+      }
+      setIsScanning(false);
+    } finally {
+      isTransitioning.current = false;
+    }
+  }, [settings, navigate]);
 
   useEffect(() => {
     isMounted.current = true;
     
-    const scanner = new Html5QrcodeScanner(
-      "reader",
-      { 
-        fps: 10, 
-        qrbox: { width: 250, height: 250 },
-        aspectRatio: 1.0,
-        videoConstraints: {
-          facingMode: "environment",
-          // @ts-ignore - some browsers support focusMode in constraints
-          focusMode: "continuous"
-        },
-        formatsToSupport: settings.formats.length > 0 ? settings.formats : undefined,
-        useBarCodeDetectorIfSupported: settings.engine === 'native'
-      },
-      /* verbose= */ false
-    );
-
-    scannerRef.current = scanner;
-
-    const onScanSuccess = async (decodedText: string) => {
-      // Avoid clearing manually here to prevent race conditions with component unmount/cleanup
-      // The cleanup function will handle it.
+    const init = async () => {
+      // Delay slightly to ensure DOM is ready and previous effect's stop is processed
+      await new Promise(r => setTimeout(r, 100));
       if (isMounted.current) {
-        setIsScanning(false);
-        setScanResult(decodedText);
-        checkAsset(decodedText);
+        startScanner();
       }
     };
-
-    const onScanFailure = (error: any) => {
-      // ignore failures as they are frequent while searching for codes
-    };
-
-    // Focus Hack: Attempt to apply focus when video element is ready
-    const setupFocusOnVideo = () => {
-      if (!isMounted.current) return null;
-      const video = document.querySelector('#reader video') as HTMLVideoElement;
-      if (video) {
-        const handleFocusClick = async (e: MouseEvent) => {
-          const stream = video.srcObject as MediaStream;
-          if (!stream) return;
-          const [track] = stream.getVideoTracks();
-          
-          if (track && 'applyConstraints' in track) {
-            try {
-              // Attempt to trigger auto-focus by re-applying constraints
-              // @ts-ignore
-              await track.applyConstraints({ focusMode: 'continuous' });
-            } catch (err) {
-              console.warn("Manual focus not supported by browser", err);
-            }
-          }
-
-          // Visual feedback
-          const rect = video.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          const y = e.clientY - rect.top;
-          
-          const box = document.createElement('div');
-          box.className = 'focus-box-animation';
-          box.style.left = `${x}px`;
-          box.style.top = `${y}px`;
-          video.parentElement?.appendChild(box);
-          setTimeout(() => {
-            if (isMounted.current) box.remove();
-          }, 600);
-        };
-
-        video.addEventListener('click', handleFocusClick);
-        return () => video.removeEventListener('click', handleFocusClick);
-      }
-      return null;
-    };
-
-    scanner.render(onScanSuccess, onScanFailure);
-
-    // Poll for video element to attach listener
-    const focusTimer = setInterval(() => {
-      if (!isMounted.current) {
-        clearInterval(focusTimer);
-        return;
-      }
-      const cleanup = setupFocusOnVideo();
-      if (cleanup) clearInterval(focusTimer);
-    }, 500);
-
+    
+    init();
+    
     return () => {
       isMounted.current = false;
-      clearInterval(focusTimer);
-      if (scannerRef.current) {
-        scannerRef.current.clear().catch(e => {
-          console.warn("Scanner cleanup failed (safe to ignore if unmounting):", e);
-        });
-        scannerRef.current = null;
+      // We don't await stop in cleanup as it's fire-and-forget for unmount
+      if (scannerRef.current && (scannerRef.current as any).isScanning) {
+        scannerRef.current.stop().catch(() => {});
       }
     };
-  }, [settings]);
+  }, [settings, startScanner]);
+
+  const toggleTorch = async () => {
+    if (!scannerRef.current || !torchSupported) return;
+    const newState = !torchEnabled;
+    try {
+      await scannerRef.current.applyVideoConstraints({
+        // @ts-ignore
+        advanced: [{ torch: newState }]
+      });
+      setTorchEnabled(newState);
+    } catch (e) {
+      console.error("Failed to toggle torch", e);
+    }
+  };
 
   const saveSettings = (newSettings: ScannerSettings) => {
     setSettings(newSettings);
     localStorage.setItem('scanner_settings', JSON.stringify(newSettings));
     setShowSettings(false);
-    // Restart scanner logic is handled by setting dependency in useEffect
   };
 
   const checkAsset = async (code: string) => {
@@ -172,7 +215,7 @@ export default function ScanPage() {
         setError('查询资产时出错');
       }
     } catch (err) {
-      setError('网络错误');
+      setError('网络故障，请检查您的连接');
     }
   };
 
@@ -183,80 +226,21 @@ export default function ScanPage() {
   };
 
   return (
-    <div className="max-w-xl mx-auto space-y-6">
+    <div className="max-w-xl mx-auto space-y-6 pb-20">
       <style>{`
-        #reader__status_span { display: none; }
-        #reader button {
-          background-color: #f3f4f6 !important;
-          color: #374151 !important;
-          border: 1px solid #e5e7eb !important;
-          border-radius: 0.75rem !important;
-          padding: 0.5rem 1rem !important;
-          font-size: 0.875rem !important;
-          font-weight: 600 !important;
-          cursor: pointer !important;
-          transition: all 0.2s !important;
+        #reader {
+          border: none !important;
+          border-radius: 1.5rem;
+          overflow: hidden;
         }
-        #reader button:hover {
-          background-color: #e5e7eb !important;
-        }
-        #reader__dashboard_section_csr button:first-child {
-          font-size: 0 !important;
-        }
-        #reader__dashboard_section_csr button:first-child::after {
-          content: '请求摄像头权限' !important;
-          font-size: 0.875rem !important;
-        }
-        #reader__dashboard_section_swaplink {
-          font-size: 0 !important;
-          color: #4f46e5 !important;
-          text-decoration: underline !important;
-          cursor: pointer !important;
-        }
-        #reader__dashboard_section_swaplink::after {
-          content: '上传图片识别' !important;
-          font-size: 0.875rem !important;
-        }
-        #reader__camera_selection {
-          padding: 0.5rem !important;
-          border-radius: 0.5rem !important;
-          border: 1px solid #e5e7eb !important;
-          margin-bottom: 1rem !important;
+        #reader video {
+          border-radius: 1.5rem;
+          object-fit: cover;
           width: 100% !important;
-        }
-        #reader__scan_region img {
-          display: none !important;
-        }
-        #html5-qrcode-button-camera-stop {
-          font-size: 0 !important;
-        }
-        #html5-qrcode-button-camera-stop::after {
-          content: '停止扫描' !important;
-          font-size: 0.875rem !important;
-        }
-        #html5-qrcode-button-file-selection {
-          font-size: 0 !important;
-        }
-        #html5-qrcode-button-file-selection::after {
-          content: '浏览本地图片' !important;
-          font-size: 0.875rem !important;
-        }
-        .focus-box-animation {
-          position: absolute;
-          width: 60px;
-          height: 60px;
-          border: 2px solid #4f46e5;
-          border-radius: 50%;
-          transform: translate(-50%, -50%) scale(0);
-          animation: focus-ping 0.6s ease-out forwards;
-          pointer-events: none;
-          z-index: 10;
-        }
-        @keyframes focus-ping {
-          0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0.8; }
-          100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+          height: 100% !important;
         }
       `}</style>
+      
       <div className="text-center relative">
         <h1 className="text-2xl font-bold text-gray-900">扫码核查</h1>
         <p className="text-sm text-gray-500 mt-1">请将条形码或二维码放入对焦框内</p>
@@ -264,23 +248,70 @@ export default function ScanPage() {
         <button 
           onClick={() => setShowSettings(true)}
           className="absolute right-0 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-indigo-600 transition-colors"
+          type="button"
         >
           <Settings className="h-6 w-6" />
         </button>
       </div>
 
-      <div className="bg-white p-4 rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative">
-        <div id="reader" className="w-full rounded-2xl overflow-hidden"></div>
-        
+      <div className="bg-white p-4 rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative min-h-[300px] flex items-center justify-center">
+        <div id="reader" className="w-full aspect-square bg-gray-50 rounded-2xl overflow-hidden relative">
+        </div>
+
+        {/* Loading Spinner - Outside of reader to avoid library conflicts */}
+        {!isScanning && !scanResult && !error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-20 rounded-3xl">
+             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+          </div>
+        )}
+
+        {/* Custom Overlays */}
+        {isScanning && (
+          <>
+            <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none z-10 rounded-3xl" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-2 border-indigo-400/50 rounded-2xl pointer-events-none z-10">
+              <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-lg" />
+              <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-lg" />
+              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-lg" />
+              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-lg" />
+              
+              <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-[scan_2s_infinite]" />
+            </div>
+
+            {/* Torch Toggle */}
+            {torchSupported && (
+              <button
+                onClick={toggleTorch}
+                className={cn(
+                  "absolute top-8 right-8 z-20 p-3 rounded-full backdrop-blur-md transition-all",
+                  torchEnabled ? "bg-yellow-400 text-white shadow-lg shadow-yellow-200" : "bg-black/20 text-white hover:bg-black/40"
+                )}
+                type="button"
+              >
+                {torchEnabled ? <Zap className="h-6 w-6" /> : <ZapOff className="h-6 w-6" />}
+              </button>
+            )}
+          </>
+        )}
+
+        <style>{`
+          @keyframes scan {
+            0% { top: 0; }
+            50% { top: 100%; }
+            100% { top: 0; }
+          }
+        `}</style>
+
+        {/* Success State (Processing) */}
         <AnimatePresence>
-          {!isScanning && !notFound && !error && (
+          {!isScanning && scanResult && !notFound && !error && (
              <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center p-8 text-center"
+              className="absolute inset-0 bg-white/90 z-30 flex flex-col items-center justify-center p-8 text-center"
              >
                 <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
-                <p className="font-bold text-gray-900">扫描成功</p>
+                <p className="font-bold text-gray-900">识别成功</p>
                 <p className="text-xs text-gray-500 mt-2">正在查询资产库: {scanResult}</p>
              </motion.div>
           )}
@@ -289,8 +320,9 @@ export default function ScanPage() {
 
       <div className="flex justify-center flex-col items-center gap-4">
          <button 
-          onClick={() => window.location.reload()}
-          className="px-6 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-200"
+          onClick={startScanner}
+          className="px-8 py-3 bg-indigo-600 text-white rounded-xl text-sm font-bold shadow-lg hover:bg-indigo-700 transition-all active:scale-95"
+          type="button"
         >
           重新扫描
         </button>
@@ -305,7 +337,11 @@ export default function ScanPage() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-              onClick={() => setNotFound(false)}
+              onClick={() => {
+                setNotFound(false);
+                setScanResult(null);
+                startScanner();
+              }}
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -326,27 +362,29 @@ export default function ScanPage() {
                 <button 
                   onClick={handleManualSearch}
                   className="w-full py-3 bg-indigo-50 text-indigo-700 rounded-xl font-bold flex items-center justify-center gap-2"
+                  type="button"
                 >
                   <Search className="h-4 w-4" />
                   以此内容手动搜索
                 </button>
                 
-                {user?.role === 'admin' && (
-                  <button 
-                    onClick={() => navigate(`/assets/new?code=${scanResult}`)}
-                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <Plus className="h-4 w-4" />
-                    以此编码新增资产
-                  </button>
-                )}
+                <button 
+                  onClick={() => navigate(`/assets/new?code=${scanResult}`)}
+                  className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg"
+                  type="button"
+                >
+                  <Plus className="h-4 w-4" />
+                  以此编码新增资产
+                </button>
                 
                 <button 
                   onClick={() => {
                     setNotFound(false);
-                    window.location.reload();
+                    setScanResult(null);
+                    startScanner();
                   }}
                   className="w-full py-2 text-gray-400 text-sm font-medium"
+                  type="button"
                 >
                   取消并重新扫码
                 </button>
@@ -357,10 +395,17 @@ export default function ScanPage() {
       </AnimatePresence>
 
       {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-700">
-          <AlertCircle className="h-5 w-5" />
-          <p className="text-sm">{error}</p>
-        </div>
+        <AnimatePresence>
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-700"
+          >
+            <AlertCircle className="h-5 w-5" />
+            <p className="text-sm flex-1">{error}</p>
+            <button onClick={startScanner} className="underline text-xs font-bold" type="button">点击重试</button>
+          </motion.div>
+        </AnimatePresence>
       )}
 
       {/* Settings Modal */}
@@ -382,7 +427,7 @@ export default function ScanPage() {
             >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-lg font-bold text-gray-900">扫码器设置</h3>
-                <button onClick={() => setShowSettings(false)} className="text-gray-400">
+                <button onClick={() => setShowSettings(false)} className="text-gray-400" type="button">
                   <X className="h-5 w-5" />
                 </button>
               </div>
@@ -394,6 +439,7 @@ export default function ScanPage() {
                     {SUPPORTED_FORMATS_OPTIONS.map((option) => (
                       <button
                         key={option.value}
+                        type="button"
                         onClick={() => {
                           const newFormats = settings.formats.includes(option.value)
                             ? settings.formats.filter(f => f !== option.value)
@@ -419,6 +465,7 @@ export default function ScanPage() {
                   <label className="block text-sm font-bold text-gray-700 mb-3">解码引擎</label>
                   <div className="flex gap-2">
                     <button
+                      type="button"
                       onClick={() => setSettings({ ...settings, engine: 'default' })}
                       className={cn(
                         "flex-1 py-2 px-3 rounded-xl text-xs font-medium border transition-all",
@@ -430,6 +477,7 @@ export default function ScanPage() {
                       默认引擎 (Zxing)
                     </button>
                     <button
+                      type="button"
                       onClick={() => setSettings({ ...settings, engine: 'native' })}
                       className={cn(
                         "flex-1 py-2 px-3 rounded-xl text-xs font-medium border transition-all",
@@ -448,6 +496,7 @@ export default function ScanPage() {
                   <button 
                     onClick={() => saveSettings(settings)}
                     className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all active:scale-95"
+                    type="button"
                   >
                     保存并应用更改
                   </button>
