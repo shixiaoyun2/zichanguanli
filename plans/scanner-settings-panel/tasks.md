@@ -1,25 +1,24 @@
-# 扫码器高级设置面板任务清单 (Tasks)
+# 扫码器重构任务清单 (Tasks)
 
-- [ ] **任务 1：定义设置项常量与类型**
-  - 在 `src/pages/Scan.tsx` 中定义支持的格式列表及设置项的 TypeScript 接口。
+- [ ] **任务 1：底层库切换与初始化优化**
+  - [ ] 将 `Scan.tsx` 中的 `Html5QrcodeScanner` 替换为 `Html5Qrcode`。
+  - [ ] 修改 `settings` 默认值，将 `engine` 设为 `native`。
+  - [ ] 编写核心启动函数 `startScanning()`，支持格式过滤和引擎选择。
 
-- [ ] **任务 2：实现 LocalStorage 管理逻辑**
-  - 编写读取和保存设置的 Helper 函数。
-  - 初始化页面时加载保存的设置。
+- [ ] **任务 2：生命周期与状态管理**
+  - [ ] 实现扫码成功后立即调用 `stop()` 并释放流。
+  - [ ] 修复“重新扫描”逻辑，使其仅触发 `startScanning()`。
+  - [ ] 编写严谨的 `cleanup` 函数，防止组件卸载或更新时出现重复预览或内存泄漏。
 
-- [ ] **任务 3：构建设置模态框组件**
-  - 使用 `framer-motion` (motion/react) 实现平滑的弹出效果。
-  - 包含格式多选列表（Checkboxes）。
-  - 包含引擎选择（Radio/Select）。
+- [ ] **任务 3：实现闪光灯功能**
+  - [ ] 封装 `toggleTorch` 函数。
+  - [ ] 在预览画面上层添加闪光灯控制按钮。
+  - [ ] 逻辑：仅当摄像头处于 active 状态且 track 支持 torch 时显示。
 
-- [ ] **任务 4：动态注入扫码器配置**
-  - 修改 `useEffect` 中的 `new Html5QrcodeScanner` 调用逻辑。
-  - 将用户选择的 `formatsToSupport` 注入配置。
-  - 设置 `useBarCodeDetectorIfSupported` 参数。
+- [ ] **任务 4：UI 兼容性与防刷测试**
+  - [ ] 确保所有按钮添加 `type="button"`。
+  - [ ] 优化扫码结果展示区的样式，使其更符合移动端交互。
 
-- [ ] **任务 5：添加设置入口按钮**
-  - 在 Scan 页面 UI 中添加设置图标。
-  - 处理点击打开模态框的逻辑。
-
-- [ ] **任务 6：实现“应用更改”刷新逻辑**
-  - 当设置保存后，如果正在扫描，需销毁当前实例并重新启动。
+- [ ] **任务 5：验证与调优**
+  - [ ] 在 AI Studio 预览环境验证“重新扫描”是否不再引起页面重载。
+  - [ ] 检查 BarcodeDetector (Native) 在当前环境的兼容性表现。
