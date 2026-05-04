@@ -60,6 +60,7 @@ export default function ScanPage() {
       try {
         await scannerRef.current.stop();
         setTorchEnabled(false);
+        setIsScanning(false);
       } catch (e) {
         console.warn("Soft failed to stop scanner (likely already stopping):", e);
       } finally {
@@ -225,6 +226,18 @@ export default function ScanPage() {
     }
   };
 
+  const getButtonConfig = () => {
+    if (isScanning) {
+      return { label: "停止扫码", onClick: stopScanner, variant: "secondary" };
+    }
+    if (scanResult || error) {
+      return { label: "重新扫描", onClick: startScanner, variant: "primary" };
+    }
+    return { label: "开始扫码", onClick: startScanner, variant: "primary" };
+  };
+
+  const btnConfig = getButtonConfig();
+
   return (
     <div className="max-w-xl mx-auto space-y-6 pb-20">
       <style>{`
@@ -258,11 +271,9 @@ export default function ScanPage() {
         <div id="reader" className="w-full aspect-square bg-gray-50 rounded-2xl overflow-hidden relative">
         </div>
 
-        {/* Loading Spinner - Outside of reader to avoid library conflicts */}
+        {/* Empty state background when not scanning and no result/error */}
         {!isScanning && !scanResult && !error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-20 rounded-3xl">
-             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
-          </div>
+          <div className="absolute inset-0 bg-gray-50 z-20 rounded-3xl" />
         )}
 
         {/* Custom Overlays */}
@@ -320,11 +331,28 @@ export default function ScanPage() {
 
       <div className="flex justify-center flex-col items-center gap-4">
          <button 
-          onClick={startScanner}
-          className="px-8 py-3 bg-indigo-600 text-white rounded-xl text-sm font-bold shadow-lg hover:bg-indigo-700 transition-all active:scale-95"
+          onClick={btnConfig.onClick}
+          className={cn(
+            "px-8 py-3 rounded-xl text-sm font-bold shadow-lg transition-all active:scale-95 min-w-[140px]",
+            btnConfig.variant === "primary" 
+              ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100" 
+              : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
+          )}
           type="button"
         >
-          重新扫描
+          <AnimatePresence mode="wait">
+            <motion.span
+              key={btnConfig.label}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
+              transition={{ duration: 0.15 }}
+              className="flex items-center justify-center gap-2"
+            >
+              {isScanning && <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />}
+              {btnConfig.label}
+            </motion.span>
+          </AnimatePresence>
         </button>
       </div>
 
