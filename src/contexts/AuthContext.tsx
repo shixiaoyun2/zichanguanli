@@ -4,6 +4,7 @@ interface User {
   id: number;
   username: string;
   role: 'admin' | 'operator';
+  departments?: string;
 }
 
 interface AuthContextType {

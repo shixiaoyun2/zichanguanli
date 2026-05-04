@@ -7,6 +7,11 @@ import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
 
+// Set FS for XLSX to work in Node environment
+if (XLSX.set_fs) {
+  XLSX.set_fs(fs);
+}
+
 const router = Router();
 
 // Helper to get or create Org/Dept (duplicated from assets.ts, maybe should move to common)
@@ -28,13 +33,28 @@ function getOrCreateDept(name: string): number {
 
 // EXPORT EXCEL (Admin Only)
 router.get('/export', authenticate, requireAdmin, (req, res) => {
+  console.log('[Excel Export] Starting export...');
   try {
     const assets = db.prepare(`
-      SELECT a.asset_code, a.name, a.card_code, a.barcode, a.user, a.status, o.name as org_name, d.name as dept_name, a.updated_at
+      SELECT 
+        a.asset_code as "资产编码", 
+        a.name as "资产名称", 
+        a.card_code as "卡片编号", 
+        a.barcode as "条形码", 
+        a.model as "规格型号",
+        a.location_name as "位置名称",
+        a.user as "使用人", 
+        a.status as "资产状态", 
+        o.name as "资产组织", 
+        d.name as "管理部门",
+        a.remarks as "备注",
+        a.updated_at as "最后修改时间"
       FROM assets a
       LEFT JOIN organizations o ON a.org_id = o.id
       LEFT JOIN departments d ON a.dept_id = d.id
     `).all();
+
+    console.log(`[Excel Export] Found ${assets.length} assets to export`);
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(assets);
@@ -43,10 +63,12 @@ router.get('/export', authenticate, requireAdmin, (req, res) => {
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
     const filename = `assets_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    console.log(`[Excel Export] Export successful: ${filename}`);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (err) {
+    console.error('[Excel Export] Error:', err);
     res.status(500).json({ message: '导出失败' });
   }
 });
@@ -84,88 +106,126 @@ router.get('/export-images', authenticate, requireAdmin, (req: AuthRequest, res)
 // IMPORT (Step 1: Parse and detect conflicts)
 router.post('/import-preview', authenticate, requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: '请上传文件' });
+  console.log(`[Excel Import] Previewing file: ${req.file.originalname}`);
 
   try {
-    const workbook = XLSX.readFile(req.file.path);
+    if (!fs.existsSync(req.file.path)) {
+      console.error(`[Excel Import] File not found at ${req.file.path}`);
+      return res.status(500).json({ message: '上传文件临时丢失' });
+    }
+
+    // Try multiple ways to read if XLSX.readFile fails
+    let workbook;
+    try {
+        workbook = XLSX.readFile(req.file.path, { cellDates: true });
+    } catch (readErr) {
+        console.warn('[Excel Import] XLSX.readFile failed, trying stream-based read...');
+        const fileBuffer = fs.readFileSync(req.file.path);
+        workbook = XLSX.read(fileBuffer, { type: 'buffer', cellDates: true });
+    }
+
     const sheetName = workbook.SheetNames[0];
-    const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]) as any[];
+    const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' }) as any[];
+    console.log(`[Excel Import] parsed ${data.length} rows from sheet: ${sheetName}`);
 
     const results: any[] = [];
 
-    for (const row of data) {
-      const assetCode = String(row.asset_code || row['资产编码'] || '');
-      if (!assetCode) continue;
+    for (const [index, row] of data.entries()) {
+      try {
+        const assetCode = String(row.asset_code || row['资产编码'] || '');
+        if (!assetCode) continue;
 
-      const existing = db.prepare('SELECT a.*, o.name as org_name, d.name as dept_name FROM assets a LEFT JOIN organizations o ON a.org_id = o.id LEFT JOIN departments d ON a.dept_id = d.id WHERE a.asset_code = ?').get(assetCode) as any;
+        const existing = db.prepare(`
+          SELECT a.id, a.name, a.asset_code, a.card_code, a.barcode, a.user, a.status, a.location_name, a.remarks, a.model, a.updated_at,
+                 o.name as org_name, d.name as dept_name 
+          FROM assets a 
+          LEFT JOIN organizations o ON a.org_id = o.id 
+          LEFT JOIN departments d ON a.dept_id = d.id 
+          WHERE a.asset_code = ?
+        `).get(assetCode) as any;
 
-      const rowData = {
-        asset_code: assetCode,
-        name: row.name || row['资产名称'] || '',
-        card_code: row.card_code || row['卡片编码'] || '',
-        barcode: row.barcode || row['条形码'] || '',
-        user: row.user || row['使用人'] || '',
-        status: row.status || row['资产状态'] || row['状态'] || '待盘点',
-        org_name: row.org_name || row['资产组织'] || '',
-        dept_name: row.dept_name || row['管理部门'] || '',
-        updated_at: row.updated_at || row['最后修改时间'] || ''
-      };
+        const rowData = {
+          asset_code: assetCode,
+          name: String(row.name || row['资产名称'] || ''),
+          card_code: String(row.card_code || row['卡片编号'] || row['卡片编码'] || ''),
+          barcode: String(row.barcode || row['条形码'] || ''),
+          model: String(row.model || row['规格型号'] || ''),
+          location_name: String(row.location_name || row['位置名称'] || ''),
+          remarks: String(row.remarks || row['备注'] || ''),
+          user: String(row.user || row['使用人'] || ''),
+          status: String(row.status || row['资产状态'] || row['状态'] || '待盘点'),
+          org_name: String(row.org_name || row['资产组织'] || ''),
+          dept_name: String(row.dept_name || row['管理部门'] || ''),
+          updated_at: String(row.updated_at || row['最后修改时间'] || '')
+        };
 
-      if (!existing) {
-        results.push({ type: 'CREATE', data: rowData });
-      } else {
-        // Conflict detection logic
-        // If file updatedAt is newer -> OVERWRITE
-        // If file updatedAt is older or empty -> PROMPT (if differences exist)
-        
-        const isIdentical = 
-          existing.name === rowData.name &&
-          existing.card_code === rowData.card_code &&
-          existing.barcode === rowData.barcode &&
-          existing.user === rowData.user &&
-          existing.status === rowData.status &&
-          existing.org_name === rowData.org_name &&
-          existing.dept_name === rowData.dept_name;
-
-        if (isIdentical) {
-          results.push({ type: 'SKIP', data: rowData, existing });
+        if (!existing) {
+          results.push({ type: 'CREATE', data: rowData });
         } else {
-          // Compare dates if available
-          const existingDate = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
-          const importDate = rowData.updated_at ? new Date(rowData.updated_at).getTime() : 0;
+          const isIdentical = 
+            String(existing.name || '') === rowData.name &&
+            String(existing.card_code || '') === rowData.card_code &&
+            String(existing.barcode || '') === rowData.barcode &&
+            String(existing.model || '') === rowData.model &&
+            String(existing.location_name || '') === rowData.location_name &&
+            String(existing.remarks || '') === rowData.remarks &&
+            String(existing.user || '') === rowData.user &&
+            String(existing.status || '') === rowData.status &&
+            String(existing.org_name || '') === rowData.org_name &&
+            String(existing.dept_name || '') === rowData.dept_name;
 
-          if (importDate > existingDate) {
-            results.push({ type: 'OVERWRITE', data: rowData, existing });
+          if (isIdentical) {
+            results.push({ type: 'SKIP', data: rowData, existing });
           } else {
-            results.push({ type: 'CONFLICT', data: rowData, existing });
+            // Compare dates safely
+            let importDate = 0;
+            if (rowData.updated_at) {
+                const d = new Date(rowData.updated_at);
+                if (!isNaN(d.getTime())) importDate = d.getTime();
+            }
+            const existingDate = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+
+            if (importDate > existingDate) {
+              results.push({ type: 'OVERWRITE', data: rowData, existing });
+            } else {
+              results.push({ type: 'CONFLICT', data: rowData, existing });
+            }
           }
         }
+      } catch (rowErr) {
+        console.error(`Error processing row ${index}:`, rowErr);
+        // Continue but maybe report error in results?
       }
     }
 
+    console.log(`[Excel Import] Conflict detection complete. Found ${results.length} valid items.`);
     fs.unlinkSync(req.file.path); // clean up
     res.json(results);
   } catch (err) {
-    res.status(500).json({ message: '解析 Excel 失败' });
+    console.error('[Excel Import] Preview crash:', err);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ message: '解析 Excel 失败', error: String(err) });
   }
 });
 
 // IMPORT (Step 2: Commit changes)
 router.post('/import-commit', authenticate, requireAdmin, (req: AuthRequest, res) => {
-  const { items } = req.body; // Array of { type: 'CREATE'|'OVERWRITE'|'CONFLICT_RESOLVED', data: ... }
+  const { items } = req.body; 
+  console.log(`[Excel Import] Committing ${items?.length || 0} items...`);
   
   const userId = req.user!.id;
   const stats = { created: 0, updated: 0, skipped: 0 };
 
   try {
     const insertAsset = db.prepare(`
-      INSERT INTO assets (org_id, dept_id, asset_code, card_code, barcode, name, user, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO assets (org_id, dept_id, asset_code, card_code, barcode, name, model, location_name, remarks, user, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const updateAsset = db.prepare(`
       UPDATE assets SET 
         org_id = ?, dept_id = ?, asset_code = ?, card_code = ?, barcode = ?, 
-        name = ?, user = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        name = ?, model = ?, location_name = ?, remarks = ?, user = ?, status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE asset_code = ?
     `);
 
@@ -181,19 +241,20 @@ router.post('/import-commit', authenticate, requireAdmin, (req: AuthRequest, res
         const deptId = data.dept_name ? getOrCreateDept(data.dept_name) : null;
 
         if (type === 'CREATE') {
-          insertAsset.run(orgId, deptId, data.asset_code, data.card_code, data.barcode, data.name, data.user, data.status);
+          insertAsset.run(orgId, deptId, data.asset_code, data.card_code, data.barcode, data.name, data.model, data.location_name, data.remarks, data.user, data.status);
           stats.created++;
         } else if (type === 'OVERWRITE' || type === 'CONFLICT_RESOLVED') {
-          updateAsset.run(orgId, deptId, data.asset_code, data.card_code, data.barcode, data.name, data.user, data.status, data.asset_code);
+          updateAsset.run(orgId, deptId, data.asset_code, data.card_code, data.barcode, data.name, data.model, data.location_name, data.remarks, data.user, data.status, data.asset_code);
           stats.updated++;
         }
       }
     });
 
     transaction(items);
+    console.log(`[Excel Import] Commit success: Created=${stats.created}, Updated=${stats.updated}, Skipped=${stats.skipped}`);
     res.json({ message: '导入成功', stats });
   } catch (err) {
-    console.error(err);
+    console.error('[Excel Import] Commit failed:', err);
     res.status(500).json({ message: '提交导入失败' });
   }
 });

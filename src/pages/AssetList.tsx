@@ -18,6 +18,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { cn, formatDate } from '../lib/utils';
 import { Link } from 'react-router-dom';
 import { useRef } from 'react';
+import MessageModal from '../components/MessageModal';
 
 interface Asset {
   id: number;
@@ -28,6 +29,9 @@ interface Asset {
   user: string;
   status: string;
   image_path: string;
+  location_name: string;
+  remarks: string;
+  model: string;
   updated_at: string;
 }
 
@@ -37,6 +41,17 @@ export default function AssetListPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+
+  const [modal, setModal] = useState<{ isOpen: boolean; title: string; message: string; type: 'success' | 'error' | 'warning' | 'info' }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showModal = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    setModal({ isOpen: true, title, message, type });
+  };
 
   const fetchAssets = async () => {
     // Load from cache first if available
@@ -98,10 +113,10 @@ export default function AssetListPage() {
         a.click();
         a.remove();
       } else {
-        alert('导出权限不足或服务器错误');
+        showModal('导出失败', '导出权限不足或服务器错误', 'error');
       }
     } catch (err) {
-      alert('导出失败');
+      showModal('导出失败', '网络连接异常，请稍后重试', 'error');
     }
   };
 
@@ -124,10 +139,10 @@ export default function AssetListPage() {
         a.click();
         a.remove();
       } else {
-        alert('图片导出权限不足或服务器错误');
+        showModal('图片导出失败', '导出权限不足或服务器错误', 'error');
       }
     } catch (err) {
-      alert('导出图片失败');
+      showModal('图片导出失败', '整理图片压缩包时出错', 'error');
     } finally {
       setExportingImages(false);
     }
@@ -155,10 +170,10 @@ export default function AssetListPage() {
         const data = await res.json();
         setImportPreview(data);
       } else {
-        alert('解析文件失败');
+        showModal('解析失败', '无法读取该 Excel 文件，请检查格式是否正确', 'error');
       }
     } catch (err) {
-      alert('网络错误');
+      showModal('网络错误', '无法连接到服务器进行文件解析', 'error');
     } finally {
       setImporting(false);
       if (importFileRef.current) importFileRef.current.value = '';
@@ -178,14 +193,14 @@ export default function AssetListPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        alert(`导入完成: 新增 ${data.stats.created}, 更新 ${data.stats.updated}, 跳过 ${data.stats.skipped}`);
+        showModal('导入成功', `操作已完成！\n新增资产: ${data.stats.created}\n更新资产: ${data.stats.updated}\n跳过资产: ${data.stats.skipped}`, 'success');
         setImportPreview(null);
         fetchAssets();
       } else {
-        alert('提交导入失败');
+        showModal('导入失败', '提交更改到数据库时发生错误，请重试', 'error');
       }
     } catch (err) {
-      alert('网络错误');
+      showModal('网络错误', '提交导入请求时连接中断', 'error');
     } finally {
       setImporting(false);
     }
@@ -277,6 +292,8 @@ export default function AssetListPage() {
                     <tr>
                       <th className="px-2 py-2">资产编码</th>
                       <th className="px-2 py-2">名称</th>
+                      <th className="px-2 py-2">型号</th>
+                      <th className="px-2 py-2">位置</th>
                       <th className="px-2 py-2">建议操作</th>
                       <th className="px-2 py-2">差异处理</th>
                     </tr>
@@ -286,6 +303,8 @@ export default function AssetListPage() {
                       <tr key={idx} className={item.type === 'CONFLICT' ? "bg-amber-50" : ""}>
                         <td className="px-2 py-2 font-mono">{item.data.asset_code}</td>
                         <td className="px-2 py-2">{item.data.name}</td>
+                        <td className="px-2 py-2 truncate max-w-[80px]">{item.data.model || '-'}</td>
+                        <td className="px-2 py-2 truncate max-w-[80px]">{item.data.location_name || '-'}</td>
                         <td className="px-2 py-2">
                           <span className={cn(
                             "px-2 py-0.5 rounded-full text-[10px] font-bold",
@@ -379,6 +398,14 @@ export default function AssetListPage() {
           </button>
         </div>
       </div>
+
+      <MessageModal 
+        isOpen={modal.isOpen} 
+        onClose={() => setModal(prev => ({ ...prev, isOpen: false }))}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+      />
 
       {/* List Area */}
       {loading ? (

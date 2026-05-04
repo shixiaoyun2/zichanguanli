@@ -42,9 +42,9 @@ router.get('/', authenticate, (req, res) => {
   const params: any[] = [];
 
   if (search) {
-    sql += ` AND (a.name LIKE ? OR a.asset_code LIKE ? OR a.barcode LIKE ?)`;
+    sql += ` AND (a.name LIKE ? OR a.asset_code LIKE ? OR a.barcode LIKE ? OR a.location_name LIKE ? OR a.model LIKE ?)`;
     const s = `%${search}%`;
-    params.push(s, s, s);
+    params.push(s, s, s, s, s);
   }
   if (dept) {
     sql += ` AND d.name = ?`;
@@ -86,7 +86,7 @@ router.get('/:idOrCode', authenticate, (req, res) => {
 
 // POST new asset (Admin Only)
 router.post('/', authenticate, requireAdmin, upload.single('image'), (req: AuthRequest, res) => {
-  const { org_name, dept_name, asset_code, card_code, barcode, name, user, status } = req.body;
+  const { org_name, dept_name, asset_code, card_code, barcode, name, user, status, location_name, remarks, model } = req.body;
   const orgId = org_name ? getOrCreateOrg(org_name) : null;
   const deptId = dept_name ? getOrCreateDept(dept_name) : null;
 
@@ -103,9 +103,9 @@ router.post('/', authenticate, requireAdmin, upload.single('image'), (req: AuthR
 
   try {
     const result = db.prepare(`
-      INSERT INTO assets (org_id, dept_id, asset_code, card_code, barcode, name, user, status, image_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(orgId, deptId, asset_code, card_code, barcode, name, user, status || '待盘点', imagePath);
+      INSERT INTO assets (org_id, dept_id, asset_code, card_code, barcode, name, user, status, image_path, location_name, remarks, model)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(orgId, deptId, asset_code, card_code, barcode, name, user, status || '待盘点', imagePath, location_name, remarks, model);
 
     const newId = result.lastInsertRowid as number;
     logChange(newId, req.user!.id, 'CREATE', null, { ...req.body, imagePath });
@@ -122,7 +122,7 @@ router.post('/', authenticate, requireAdmin, upload.single('image'), (req: AuthR
 // PATCH asset
 router.patch('/:id', authenticate, upload.single('image'), (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { org_name, dept_name, asset_code, card_code, barcode, name, user, status, last_updated_at } = req.body;
+  const { org_name, dept_name, asset_code, card_code, barcode, name, user, status, last_updated_at, location_name, remarks, model } = req.body;
   
   try {
     const existing = db.prepare('SELECT a.*, o.name as org_name, d.name as dept_name FROM assets a LEFT JOIN organizations o ON a.org_id = o.id LEFT JOIN departments d ON a.dept_id = d.id WHERE a.id = ?').get(id) as any;
@@ -173,10 +173,14 @@ router.patch('/:id', authenticate, upload.single('image'), (req: AuthRequest, re
     db.prepare(`
       UPDATE assets SET 
         org_id = ?, dept_id = ?, asset_code = ?, card_code = ?, barcode = ?, 
-        name = ?, user = ?, status = ?, image_path = ?, updated_at = CURRENT_TIMESTAMP
+        name = ?, user = ?, status = ?, image_path = ?, location_name = ?, remarks = ?, model = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(orgId, deptId, asset_code || existing.asset_code, card_code || existing.card_code, barcode || existing.barcode, 
-           name || existing.name, user || existing.user, status || existing.status, imagePath, id);
+           name || existing.name, user || existing.user, status || existing.status, imagePath, 
+           location_name !== undefined ? location_name : existing.location_name,
+           remarks !== undefined ? remarks : existing.remarks,
+           model !== undefined ? model : existing.model,
+           id);
 
     const updated = db.prepare('SELECT * FROM assets WHERE id = ?').get(id);
     logChange(Number(id), req.user!.id, 'UPDATE', existing, updated);

@@ -47,6 +47,9 @@ db.exec(`
     name TEXT NOT NULL,
     user TEXT,
     image_path TEXT,
+    location_name TEXT,
+    remarks TEXT,
+    model TEXT,
     status TEXT CHECK(status IN ('正常', '报废', '维修', '已盘点', '待盘点')) NOT NULL DEFAULT '待盘点',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -54,6 +57,26 @@ db.exec(`
     FOREIGN KEY (dept_id) REFERENCES departments(id)
   );
 
+  -- Migration helper: Add columns if they don't exist
+  PRAGMA table_info(assets);
+`);
+
+// Add new columns to existing database if missing
+const assetColumns = ['location_name', 'remarks', 'model'];
+for (const col of assetColumns) {
+  try {
+    const tableInfo = db.prepare(`PRAGMA table_info(assets)`).all() as any[];
+    const exists = tableInfo.some(c => c.name === col);
+    if (!exists) {
+      db.exec(`ALTER TABLE assets ADD COLUMN ${col} TEXT;`);
+      console.log(`Added column ${col} to assets table`);
+    }
+  } catch (e) {
+    console.error(`Failed to add column ${col}:`, e);
+  }
+}
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS inventory_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     asset_id INTEGER,

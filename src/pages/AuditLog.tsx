@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { formatDate, cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import MessageModal from '../components/MessageModal';
 
 interface AuditLog {
   id: number;
@@ -30,6 +31,17 @@ export default function AuditLogPage() {
   const [loading, setLoading] = useState(true);
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
   const [rollbackLoading, setRollbackLoading] = useState(false);
+
+  const [modal, setModal] = useState<{ isOpen: boolean; title: string; message: string; type: 'success' | 'error' | 'warning' | 'info' }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showModal = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    setModal({ isOpen: true, title, message, type });
+  };
 
   const fetchLogs = async () => {
     try {
@@ -61,15 +73,15 @@ export default function AuditLogPage() {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
       if (res.ok) {
-        alert('回滚成功');
+        showModal('成功', '资产数据已成功回滚', 'success');
         fetchLogs();
         setSelectedLog(null);
       } else {
         const data = await res.json();
-        alert(data.message || '回滚失败');
+        showModal('回滚失败', data.message || '系统无法执行回滚', 'error');
       }
     } catch (err) {
-      alert('网络错误');
+      showModal('网络错误', '操作超时，请检查网络连接', 'error');
     } finally {
       setRollbackLoading(false);
     }
@@ -87,6 +99,14 @@ export default function AuditLogPage() {
 
   return (
     <div className="space-y-6">
+      <MessageModal 
+        isOpen={modal.isOpen} 
+        onClose={() => setModal(prev => ({ ...prev, isOpen: false }))}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">审计日志</h1>

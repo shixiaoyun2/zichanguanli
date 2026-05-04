@@ -18,6 +18,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { cn, formatDate } from '../lib/utils';
 import { motion } from 'motion/react';
+import MessageModal from '../components/MessageModal';
 
 export default function AssetDetailsPage() {
   const { id } = useParams();
@@ -30,6 +31,16 @@ export default function AssetDetailsPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [useAI, setUseAI] = useState(false);
+  const [modal, setModal] = useState<{ isOpen: boolean; title: string; message: string; type: 'success' | 'error' | 'warning' | 'info' }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showModal = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    setModal({ isOpen: true, title, message, type });
+  };
 
   const [formData, setFormData] = useState({
     name: '',
@@ -40,6 +51,9 @@ export default function AssetDetailsPage() {
     dept_name: '',
     user: '',
     status: '待盘点',
+    location_name: '',
+    remarks: '',
+    model: '',
     updated_at: ''
   });
 
@@ -117,7 +131,10 @@ export default function AssetDetailsPage() {
               barcode: data.barcode || prev.barcode,
               org_name: data.org_name || prev.org_name,
               dept_name: data.dept_name || prev.dept_name,
-              user: data.user || prev.user
+              user: data.user || prev.user,
+              location_name: data.location_name || prev.location_name,
+              remarks: data.remarks || prev.remarks,
+              model: data.model || prev.model
             }));
             setSuccess('AI 识别填充完成，请核对信息');
           } else {
@@ -164,19 +181,19 @@ export default function AssetDetailsPage() {
 
       const data = await res.json();
       if (res.ok) {
-        setSuccess(isNew ? '资产创建成功' : '资产更新成功');
+        showModal('保存成功', isNew ? '资产创建已完成' : '资产信息更新成功', 'success');
         if (isNew) {
           setTimeout(() => navigate(`/assets/${data.id}`), 1500);
         } else {
           fetchAsset(); // Refresh
         }
       } else if (res.status === 409) {
-        setError('数据冲突：该资产已被他人更新，请刷新页面加载最新数据。');
+        showModal('版本冲突', '该资产已被他人更新，请刷新页面加载最新数据。', 'warning');
       } else {
-        setError(data.message || '保存失败');
+        showModal('保存失败', data.message || '系统无法保存您的更改', 'error');
       }
     } catch (err) {
-      setError('网络错误');
+      showModal('网络错误', '无法连接到服务器，请检查网络设置', 'error');
     } finally {
       setSaving(false);
     }
@@ -326,43 +343,47 @@ export default function AssetDetailsPage() {
               <div className="col-span-full">
                 <label className="block text-xs font-medium text-gray-500 mb-1">资产名称</label>
                 <input 
-                  type="text" name="name" value={formData.name} onChange={handleInputChange} required
+                  type="text" name="name" value={formData.name || ''} onChange={handleInputChange} required
                   disabled={!canEdit}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                  placeholder="请输入资产名称"
                 />
               </div>
 
-              <div>
+              <div className="col-span-full md:col-span-1">
+                <label className="block text-xs font-medium text-gray-500 mb-1">规格型号</label>
+                <input 
+                  type="text" name="model" value={formData.model || ''} onChange={handleInputChange}
+                  disabled={!canEdit}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                  placeholder="如：2023款 16G+512G"
+                />
+              </div>
+
+              <div className="col-span-full md:col-span-1">
+                <label className="block text-xs font-medium text-gray-500 mb-1">位置名称</label>
+                <input 
+                  type="text" name="location_name" value={formData.location_name || ''} onChange={handleInputChange}
+                  disabled={!canEdit}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                  placeholder="如：北京总部 A座 302"
+                />
+              </div>
+
+              <div className="col-span-full md:col-span-1">
                 <label className="block text-xs font-medium text-gray-500 mb-1">资产编码 (唯一)</label>
                 <input 
-                  type="text" name="asset_code" value={formData.asset_code} onChange={handleInputChange} required
+                  type="text" name="asset_code" value={formData.asset_code || ''} onChange={handleInputChange} required
                   disabled={!canEdit}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                  placeholder="扫码获取或手动输入"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">条形码</label>
-                <input 
-                  type="text" name="barcode" value={formData.barcode || ''} onChange={handleInputChange}
-                  disabled={!canEdit}
-                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">卡片编码</label>
-                <input 
-                  type="text" name="card_code" value={formData.card_code || ''} onChange={handleInputChange}
-                  disabled={!canEdit}
-                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
-                />
-              </div>
-
-              <div>
+              <div className="col-span-full md:col-span-1">
                 <label className="block text-xs font-medium text-gray-500 mb-1">当前状态</label>
                 <select 
-                  name="status" value={formData.status} onChange={handleInputChange}
+                  name="status" value={formData.status || '待盘点'} onChange={handleInputChange}
                   disabled={!canEdit}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 cursor-pointer"
                 >
@@ -372,6 +393,24 @@ export default function AssetDetailsPage() {
                   <option value="维修">维修</option>
                   <option value="报废">报废</option>
                 </select>
+              </div>
+
+              <div className="col-span-full md:col-span-1">
+                <label className="block text-xs font-medium text-gray-500 mb-1">条形码</label>
+                <input 
+                  type="text" name="barcode" value={formData.barcode || ''} onChange={handleInputChange}
+                  disabled={!canEdit}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                />
+              </div>
+
+              <div className="col-span-full md:col-span-1">
+                <label className="block text-xs font-medium text-gray-500 mb-1">卡片编号</label>
+                <input 
+                  type="text" name="card_code" value={formData.card_code || ''} onChange={handleInputChange}
+                  disabled={!canEdit}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                />
               </div>
             </div>
 
@@ -399,12 +438,23 @@ export default function AssetDetailsPage() {
                 />
               </div>
 
-              <div className="col-span-full">
+              <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">使用人</label>
                 <input 
                   type="text" name="user" value={formData.user || ''} onChange={handleInputChange}
                   disabled={!canEdit}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+                />
+              </div>
+
+              <div className="col-span-full">
+                <label className="block text-xs font-medium text-gray-500 mb-1">备注</label>
+                <textarea 
+                  name="remarks" value={formData.remarks || ''} onChange={(e) => setFormData(prev => ({ ...prev, remarks: e.target.value }))}
+                  disabled={!canEdit}
+                  rows={2}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 resize-none"
+                  placeholder="在此输入其他备注信息..."
                 />
               </div>
             </div>
@@ -427,11 +477,18 @@ export default function AssetDetailsPage() {
             disabled={saving || !canEdit}
             className="flex-[2] md:flex-none inline-flex justify-center items-center px-10 py-3 bg-indigo-600 text-white rounded-xl text-sm font-bold shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-all active:scale-95"
           >
-            {saving ? '正在保存...' : '保存修改'}
+            {saving ? '正在保存...' : (isNew ? '创建资产' : '保存修改')}
             {!saving && <Save className="h-4 w-4 ml-2" />}
           </button>
         </div>
       </form>
+      <MessageModal 
+        isOpen={modal.isOpen} 
+        onClose={() => setModal(prev => ({ ...prev, isOpen: false }))}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+      />
     </div>
   );
 }

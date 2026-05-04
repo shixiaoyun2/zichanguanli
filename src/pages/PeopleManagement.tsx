@@ -10,11 +10,13 @@ import {
   X,
   Building,
   CheckCircle2,
-  Users
+  Users,
+  AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import MessageModal from '../components/MessageModal';
 
 interface UserData {
   id: number;
@@ -38,6 +40,17 @@ export default function PeopleManagementPage() {
   const [role, setRole] = useState<'admin' | 'operator'>('operator');
   const [selectedDepts, setSelectedDepts] = useState<string[]>([]);
   const [newPassword, setNewPassword] = useState('');
+
+  const [modal, setModal] = useState<{ isOpen: boolean; title: string; message: string; type: 'success' | 'error' | 'warning' | 'info' }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showModal = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    setModal({ isOpen: true, title, message, type });
+  };
 
   const fetchUsers = async () => {
     try {
@@ -112,10 +125,10 @@ export default function PeopleManagementPage() {
         fetchUsers();
       } else {
         const data = await res.json();
-        alert(data.message || '操作失败');
+        showModal('操作失败', data.message || '保存用户信息时出错', 'error');
       }
     } catch (err) {
-      alert('网络错误');
+      showModal('网络错误', '无法连接到服务器，请重试', 'error');
     }
   };
 
@@ -130,10 +143,10 @@ export default function PeopleManagementPage() {
         fetchUsers();
       } else {
         const data = await res.json();
-        alert(data.message || '删除失败');
+        showModal('删除失败', data.message || '无法删除该用户', 'error');
       }
     } catch (err) {
-      alert('网络错误');
+      showModal('网络错误', '连接服务失败', 'error');
     }
   };
 
@@ -151,14 +164,14 @@ export default function PeopleManagementPage() {
       });
 
       if (res.ok) {
-        alert('密码重置成功');
+        showModal('成功', '密码已重置', 'success');
         setIsResetModalOpen(false);
         setNewPassword('');
       } else {
-        alert('重置失败');
+        showModal('重置失败', '无法重置用户密码', 'error');
       }
     } catch (err) {
-      alert('网络错误');
+      showModal('网络错误', '操作超时，请重试', 'error');
     }
   };
 
@@ -455,6 +468,13 @@ export default function PeopleManagementPage() {
           </div>
         )}
       </AnimatePresence>
+      <MessageModal 
+        isOpen={modal.isOpen} 
+        onClose={() => setModal(prev => ({ ...prev, isOpen: false }))}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+      />
     </div>
   );
 }
