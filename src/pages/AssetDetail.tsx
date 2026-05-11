@@ -104,22 +104,19 @@ export default function AssetDetailsPage() {
     }
   }, [id, isNew, location.search]);
 
-  // Handle OCR data from navigation state separate from fetched data
+  // Handle OCR data from navigation state and manage its lifecycle
   useEffect(() => {
     if (location.state?.ocrData) {
       setOcrData(location.state.ocrData);
       setUseAI(true);
-      // Clear navigation state to avoid re-applying on every re-render or back navigation
-      window.history.replaceState({}, document.title);
-    }
-  }, [location.state]);
-
-  // Clear OCR data only when asset ID actually changes and no new OCR state is present
-  useEffect(() => {
-    if (!location.state?.ocrData) {
+      // Note: We deliberately avoid mutating window.history to prevent React Router 
+      // lifecycle bugs in Strict Mode when navigating from Scan page.
+    } else {
+      // Clear OCR data if navigating to a page without OCR state 
+      // (e.g. clicking "New Asset" while already on new asset page, or jumping to another asset)
       setOcrData(null);
     }
-  }, [id]);
+  }, [location.key, location.state]);
 
   useEffect(() => {
     if (ocrData && !loading) {
