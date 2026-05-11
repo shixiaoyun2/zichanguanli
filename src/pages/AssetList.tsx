@@ -208,7 +208,7 @@ export default function AssetListPage() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case '正常': return <PackageCheck className="h-4 w-4 text-green-500" />;
+      case '损坏': return <AlertCircle className="h-4 w-4 text-red-600" />;
       case '维修': return <Wrench className="h-4 w-4 text-orange-500" />;
       case '报废': return <Ban className="h-4 w-4 text-red-500" />;
       case '待盘点': return <AlertCircle className="h-4 w-4 text-blue-500" />;
@@ -219,7 +219,7 @@ export default function AssetListPage() {
   const getStatusBadge = (status: string) => {
     const base = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium";
     switch (status) {
-      case '正常': return cn(base, "bg-green-100 text-green-800");
+      case '损坏': return cn(base, "bg-red-100 text-red-800");
       case '已盘点': return cn(base, "bg-green-100 text-green-800");
       case '维修': return cn(base, "bg-orange-100 text-orange-800");
       case '报废': return cn(base, "bg-red-100 text-red-800");
@@ -384,7 +384,7 @@ export default function AssetListPage() {
             onChange={(e) => setStatusFilter(e.target.value)}
           >
             <option value="">所有状态</option>
-            <option value="正常">正常</option>
+            <option value="损坏">损坏</option>
             <option value="待盘点">待盘点</option>
             <option value="已盘点">已盘点</option>
             <option value="维修">维修</option>

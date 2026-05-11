@@ -1,7 +1,11 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { useNavigate } from 'react-router-dom';
-import { Scan, X, AlertCircle, Search, Plus, Settings, Check, Zap, ZapOff } from 'lucide-react';
+import { 
+  Scan, X, AlertCircle, Search, Plus, Settings, 
+  Check, Zap, ZapOff, Sparkles, Camera, 
+  RefreshCcw, Image as ImageIcon 
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -28,12 +32,21 @@ const SUPPORTED_FORMATS_OPTIONS = [
 export default function ScanPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  
+  // Base State
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [editableResult, setEditableResult] = useState('');
   const [notFound, setNotFound] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
+  // OCR & Mode State
+  const [mode, setMode] = useState<'scan' | 'ocr'>('scan');
+  const [isOcrProcessing, setIsOcrProcessing] = useState(false);
+  const ocrFileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Hardware State
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
   
@@ -54,56 +67,67 @@ export default function ScanPage() {
   const isTransitioning = useRef(false);
 
   const stopScanner = useCallback(async () => {
-    if (isTransitioning.current) return;
-    if (scannerRef.current && (scannerRef.current as any).isScanning) {
-      isTransitioning.current = true;
-      try {
-        await scannerRef.current.stop();
-        setTorchEnabled(false);
-        setIsScanning(false);
-      } catch (e) {
-        console.warn("Soft failed to stop scanner (likely already stopping):", e);
-      } finally {
-        isTransitioning.current = false;
+    if (isTransitioning.current) {
+      console.log("Scanner already transitioning, skipping stop");
+      return;
+    }
+    
+    // Check state properly using getState() if possible, or use the lib's internal flag
+    if (scannerRef.current) {
+      const isScanning = (scannerRef.current as any).isScanning;
+      if (isScanning) {
+        isTransitioning.current = true;
+        try {
+          await scannerRef.current.stop();
+          setTorchEnabled(false);
+          setIsScanning(false);
+        } catch (e: any) {
+          if (e?.includes && e.includes("already under transition")) {
+             // Ignore this specific error as it's harmless if we're already trying to stop
+          } else {
+            console.warn("Soft failed to stop scanner:", e);
+          }
+        } finally {
+          isTransitioning.current = false;
+        }
       }
     }
   }, []);
 
   const startScanner = useCallback(async () => {
-    if (!isMounted.current || isTransitioning.current) return;
+    if (!isMounted.current || isTransitioning.current || mode !== 'scan') return;
     
-    // 1. 环境安全检查 (Camera requires HTTPS or localhost)
     if (!window.isSecureContext && window.location.hostname !== 'localhost') {
-      setError("扫码功能需要 HTTPS 环境。请确保您的网站已配置 SSL 证书，或在本地使用 localhost 访问。");
+      setError("扫码功能需要 HTTPS 环境。");
       return;
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setError("您的浏览器不支持或禁用了摄像头访问 API。");
+      setError("您的浏览器不支持摄像头访问。");
       return;
     }
 
     isTransitioning.current = true;
     
     try {
-      // 1. Ensure any existing scanner is physically stopped
-      if (scannerRef.current && (scannerRef.current as any).isScanning) {
-        await scannerRef.current.stop();
-      }
-
-      // 2. Clear container to prevent DOM conflicts
+      // Clear container and reset state
       const container = document.getElementById('reader');
       if (container) container.innerHTML = ""; 
 
-      // 3. Clear state
       setIsScanning(true);
       setError(null);
       setNotFound(false);
       setScanResult(null);
 
-      // 4. New instance if needed
       if (!scannerRef.current) {
         scannerRef.current = new Html5Qrcode("reader");
+      }
+
+      // Check if it's already scanning and stop it first if so
+      if ((scannerRef.current as any).isScanning) {
+        try {
+          await scannerRef.current.stop();
+        } catch (e) {}
       }
 
       await scannerRef.current.start(
@@ -116,70 +140,60 @@ export default function ScanPage() {
           useBarCodeDetectorIfSupported: settings.engine === 'native'
         },
         async (decodedText) => {
-          // Success case
-          if (scannerRef.current && (scannerRef.current as any).isScanning) {
-            await scannerRef.current.stop();
-          }
           if (isMounted.current) {
             setScanResult(decodedText);
             setIsScanning(false);
+            
+            // Stop scanner immediately upon detection to free camera
+            if (scannerRef.current && (scannerRef.current as any).isScanning) {
+              isTransitioning.current = true;
+              scannerRef.current.stop()
+                .catch(() => {})
+                .finally(() => { isTransitioning.current = false; });
+            }
+            
             checkAsset(decodedText);
           }
         },
-        () => { /* ignore silent failure during scan */ }
+        () => { /* silent */ }
       );
 
-      // Check torch support
       try {
         const caps = scannerRef.current.getRunningTrackCapabilities();
-        if (caps && (caps as any).torch) {
-          setTorchSupported(true);
-        } else {
-          setTorchSupported(false);
-        }
+        setTorchSupported(!!(caps && (caps as any).torch));
       } catch (e) {
         setTorchSupported(false);
       }
 
     } catch (err: any) {
-      console.error("Scanner start error:", err);
-      const errMsg = err?.toString() || "";
-      if (errMsg.includes("NotAllowedError")) {
-         setError("摄像头权限被拒绝，请检查浏览器权限设置。");
-      } else if (errMsg.includes("NotFoundError")) {
-         setError("未找到摄像头设备，请确保已连接。");
-      } else if (errMsg.includes("NotSupportedError") || errMsg.includes("not supported")) {
-         setError("浏览器版本过低或处于不安全环境（需要 HTTPS）。");
-      } else {
-         setError("启动失败。请刷新重试或检查摄像头是否被占用。");
+      if (isMounted.current) {
+        console.error("Scanner start error:", err);
+        setError("启动失败。请检查摄像头权限或是否被占用。");
+        setIsScanning(false);
       }
-      setIsScanning(false);
     } finally {
       isTransitioning.current = false;
     }
-  }, [settings, navigate]);
+  }, [settings, mode]);
 
   useEffect(() => {
     isMounted.current = true;
-    
-    const init = async () => {
-      // Delay slightly to ensure DOM is ready and previous effect's stop is processed
-      await new Promise(r => setTimeout(r, 100));
-      if (isMounted.current) {
-        startScanner();
-      }
-    };
-    
-    init();
+    if (mode === 'scan') {
+      const init = async () => {
+        await new Promise(r => setTimeout(r, 100));
+        if (isMounted.current) startScanner();
+      };
+      init();
+    } else {
+      stopScanner();
+    }
     
     return () => {
       isMounted.current = false;
-      // We don't await stop in cleanup as it's fire-and-forget for unmount
-      if (scannerRef.current && (scannerRef.current as any).isScanning) {
-        scannerRef.current.stop().catch(() => {});
-      }
+      // Use the stop function to respect transitions
+      stopScanner();
     };
-  }, [settings, startScanner]);
+  }, [settings, startScanner, mode, stopScanner]);
 
   const toggleTorch = async () => {
     if (!scannerRef.current || !torchSupported) return;
@@ -195,13 +209,24 @@ export default function ScanPage() {
     }
   };
 
-  const saveSettings = (newSettings: ScannerSettings) => {
-    setSettings(newSettings);
-    localStorage.setItem('scanner_settings', JSON.stringify(newSettings));
-    setShowSettings(false);
+  const [options, setOptions] = useState<any>(null);
+
+  useEffect(() => {
+    fetchOptions();
+    // ... rest of init
+  }, []);
+
+  const fetchOptions = async () => {
+    try {
+      const res = await fetch('/api/assets/metadata/options', {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) setOptions(await res.json());
+    } catch (e) {}
   };
 
-  const checkAsset = async (code: string) => {
+  const checkAsset = async (code: string, ocrData?: any) => {
+    setError(null);
     try {
       const res = await fetch(`/api/assets/${code}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
@@ -209,54 +234,124 @@ export default function ScanPage() {
       
       if (res.ok) {
         const data = await res.json();
-        navigate(`/assets/${data.id}`);
+        // If match found, navigate with OCR data for comparison
+        navigate(`/assets/${data.id}`, { state: { ocrData } });
       } else if (res.status === 404) {
+        setScanResult(code);
+        setEditableResult(code);
         setNotFound(true);
+        // Store the OCR data globally to pass it when "New Asset" is clicked
+        (window as any).lastOcrData = ocrData;
       } else {
         setError('查询资产时出错');
       }
     } catch (err) {
-      setError('网络故障，请检查您的连接');
+      setError('网络故障，请检查连接');
     }
+  };
+
+  const handleOcrFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsOcrProcessing(true);
+    setError(null);
+
+    try {
+      const compressed = await compressImage(file);
+      const body = new FormData();
+      body.append('image', compressed);
+      
+      const res = await fetch('/api/ai/ocr', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        body
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.asset_code) {
+          checkAsset(data.asset_code, data);
+        } else {
+          setError('未能识别到有效的资产编码');
+        }
+      } else {
+        const errData = await res.json();
+        setError(`AI 识别失败: ${errData.error || '服务器错误'}`);
+      }
+    } catch (err) {
+      setError('处理识别时出现异常');
+    } finally {
+      setIsOcrProcessing(false);
+      if (ocrFileInputRef.current) ocrFileInputRef.current.value = '';
+    }
+  };
+
+  const compressImage = (file: File): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (e) => {
+        const img = new Image();
+        img.src = e.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const MAX_SIZE = 1200;
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Compression failed'));
+          }, 'image/jpeg', 0.8);
+        };
+        img.onerror = reject;
+      };
+      reader.onerror = reject;
+    });
   };
 
   const handleManualSearch = () => {
-    if (scanResult) {
-       navigate(`/assets?search=${scanResult}`);
-    }
+    if (editableResult) navigate(`/assets?search=${editableResult}`);
   };
 
-  const getButtonConfig = () => {
-    if (isScanning) {
-      return { label: "停止扫码", onClick: stopScanner, variant: "secondary" };
-    }
-    if (scanResult || error) {
-      return { label: "重新扫描", onClick: startScanner, variant: "primary" };
-    }
-    return { label: "开始扫码", onClick: startScanner, variant: "primary" };
+  const handleRetrySearch = () => {
+    setNotFound(false);
+    checkAsset(editableResult);
   };
 
-  const btnConfig = getButtonConfig();
+  const saveSettings = (newSettings: ScannerSettings) => {
+    setSettings(newSettings);
+    localStorage.setItem('scanner_settings', JSON.stringify(newSettings));
+    setShowSettings(false);
+  };
 
   return (
     <div className="max-w-xl mx-auto space-y-6 pb-20">
       <style>{`
-        #reader {
-          border: none !important;
-          border-radius: 1.5rem;
-          overflow: hidden;
-        }
-        #reader video {
-          border-radius: 1.5rem;
-          object-fit: cover;
-          width: 100% !important;
-          height: 100% !important;
-        }
+        #reader { border: none !important; border-radius: 1.5rem; overflow: hidden; }
+        #reader video { border-radius: 1.5rem; object-fit: cover; width: 100% !important; height: 100% !important; }
       `}</style>
       
       <div className="text-center relative">
-        <h1 className="text-2xl font-bold text-gray-900">扫码核查</h1>
-        <p className="text-sm text-gray-500 mt-1">请将条形码或二维码放入对焦框内</p>
+        <h1 className="text-2xl font-bold text-gray-900">资产核查</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          识别资产标签进行快速核查 {options?.currentModel && <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-400 font-mono ml-1">AI: {options.currentModel}</span>}
+        </p>
         
         <button 
           onClick={() => setShowSettings(true)}
@@ -267,17 +362,60 @@ export default function ScanPage() {
         </button>
       </div>
 
-      <div className="bg-white p-4 rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative min-h-[300px] flex items-center justify-center">
-        <div id="reader" className="w-full aspect-square bg-gray-50 rounded-2xl overflow-hidden relative">
-        </div>
+      {/* Mode Switcher */}
+      <div className="flex bg-gray-100 p-1.5 rounded-2xl">
+        <button 
+          onClick={() => setMode('scan')}
+          className={cn(
+            "flex-1 py-3 px-4 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2",
+            mode === 'scan' ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:bg-gray-200/50"
+          )}
+        >
+          <Scan className="h-4 w-4" />
+          条码/二维码
+        </button>
+        <button 
+          onClick={() => setMode('ocr')}
+          className={cn(
+            "flex-1 py-3 px-4 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2",
+            mode === 'ocr' ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:bg-gray-200/50"
+          )}
+        >
+          <Sparkles className="h-4 w-4" />
+          AI 智能识别
+        </button>
+      </div>
 
-        {/* Empty state background when not scanning and no result/error */}
-        {!isScanning && !scanResult && !error && (
-          <div className="absolute inset-0 bg-gray-50 z-20 rounded-3xl" />
+      <div className="bg-white p-4 rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative min-h-[340px] flex items-center justify-center">
+        {mode === 'scan' ? (
+          <div id="reader" className="w-full aspect-square bg-gray-50 rounded-2xl overflow-hidden relative z-0"></div>
+        ) : (
+          <div className="w-full aspect-square bg-gray-50 rounded-2xl overflow-hidden flex flex-col items-center justify-center p-8 border-2 border-dashed border-gray-200 relative z-0">
+            <div className="bg-indigo-100 p-6 rounded-full mb-6 text-indigo-600">
+              <Camera className="h-10 w-10" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 mb-2">拍照识别资产信息</h3>
+            <p className="text-sm text-gray-500 text-center mb-8 px-4">支持识别残缺标签、手写文字或异形编码，利用 AI 理解图片内容。</p>
+            <button 
+              onClick={() => ocrFileInputRef.current?.click()}
+              disabled={isOcrProcessing}
+              className="px-10 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center gap-3 disabled:opacity-50"
+            >
+              {isOcrProcessing ? (
+                <div className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/20 border-t-white" />
+                  智能处理中...
+                </div>
+              ) : (
+                <><Camera className="h-5 w-5" />拍照识别</>
+              )}
+            </button>
+            <input type="file" ref={ocrFileInputRef} onChange={handleOcrFileChange} accept="image/*" capture="environment" className="hidden" />
+          </div>
         )}
 
-        {/* Custom Overlays */}
-        {isScanning && (
+        {/* Scan Overlays */}
+        {mode === 'scan' && isScanning && (
           <>
             <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none z-10 rounded-3xl" />
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-2 border-indigo-400/50 rounded-2xl pointer-events-none z-10">
@@ -285,19 +423,15 @@ export default function ScanPage() {
               <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-lg" />
               <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-lg" />
               <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-lg" />
-              
-              <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-[scan_2s_infinite]" />
+              <div className="absolute top-0 left-0 right-0 h-0.5 bg-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.5)] animate-[scan_2s_infinite]" />
             </div>
-
-            {/* Torch Toggle */}
             {torchSupported && (
               <button
                 onClick={toggleTorch}
                 className={cn(
                   "absolute top-8 right-8 z-20 p-3 rounded-full backdrop-blur-md transition-all",
-                  torchEnabled ? "bg-yellow-400 text-white shadow-lg shadow-yellow-200" : "bg-black/20 text-white hover:bg-black/40"
+                  torchEnabled ? "bg-yellow-400 text-white shadow-lg" : "bg-black/20 text-white"
                 )}
-                type="button"
               >
                 {torchEnabled ? <Zap className="h-6 w-6" /> : <ZapOff className="h-6 w-6" />}
               </button>
@@ -305,235 +439,134 @@ export default function ScanPage() {
           </>
         )}
 
-        <style>{`
-          @keyframes scan {
-            0% { top: 0; }
-            50% { top: 100%; }
-            100% { top: 0; }
-          }
-        `}</style>
-
-        {/* Success State (Processing) */}
+        {/* Status Overlays */}
         <AnimatePresence>
-          {!isScanning && scanResult && !notFound && !error && (
+          {(isOcrProcessing || (!isScanning && scanResult && !notFound && !error)) && (
              <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="absolute inset-0 bg-white/90 z-30 flex flex-col items-center justify-center p-8 text-center"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="absolute inset-0 bg-white/95 z-30 flex flex-col items-center justify-center p-8 text-center rounded-3xl"
              >
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
-                <p className="font-bold text-gray-900">识别成功</p>
-                <p className="text-xs text-gray-500 mt-2">正在查询资产库: {scanResult}</p>
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4" />
+                <p className="font-bold text-gray-900">{isOcrProcessing ? 'AI 正在分析图片' : '识别成功'}</p>
+                <p className="text-sm text-gray-500 mt-2">
+                  {isOcrProcessing ? '正在理解标签内容，请稍候...' : `正在查询资产库: ${scanResult}`}
+                </p>
              </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      <div className="flex justify-center flex-col items-center gap-4">
-         <button 
-          onClick={btnConfig.onClick}
-          className={cn(
-            "px-8 py-3 rounded-xl text-sm font-bold shadow-lg transition-all active:scale-95 min-w-[140px]",
-            btnConfig.variant === "primary" 
-              ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100" 
-              : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
-          )}
-          type="button"
-        >
-          <AnimatePresence mode="wait">
-            <motion.span
-              key={btnConfig.label}
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -5 }}
-              transition={{ duration: 0.15 }}
-              className="flex items-center justify-center gap-2"
-            >
-              {isScanning && <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />}
-              {btnConfig.label}
-            </motion.span>
-          </AnimatePresence>
-        </button>
-      </div>
+      {mode === 'scan' && (
+        <div className="flex justify-center flex-col items-center gap-4">
+          <button 
+            onClick={isScanning ? stopScanner : startScanner}
+            className={cn(
+              "px-8 py-4 rounded-2xl text-base font-bold shadow-lg transition-all active:scale-95 min-w-[200px]",
+              isScanning ? "bg-white border-2 border-gray-200 text-gray-600" : "bg-indigo-600 text-white hover:bg-indigo-700"
+            )}
+          >
+            {isScanning ? "停止扫码" : "开始扫码"}
+          </button>
+          <button onClick={() => ocrFileInputRef.current?.click()} className="text-sm text-indigo-600 font-medium hover:underline flex items-center gap-1.5 py-2">
+            <ImageIcon className="h-4 w-4" />
+            或从相册上传图片识别
+          </button>
+        </div>
+      )}
+
+      {/* Error Message */}
+      {error && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-700">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <p className="text-sm flex-1">{error}</p>
+          <button onClick={mode === 'scan' ? startScanner : () => ocrFileInputRef.current?.click()} className="underline text-xs font-bold shrink-0">重试</button>
+        </motion.div>
+      )}
 
       {/* Not Found Modal */}
       <AnimatePresence>
         {notFound && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-              onClick={() => {
-                setNotFound(false);
-                setScanResult(null);
-                startScanner();
-              }}
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 text-center"
-            >
-              <div className="bg-amber-50 p-4 rounded-full w-fit mx-auto mb-4 border border-amber-100">
-                <AlertCircle className="h-8 w-8 text-amber-600" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setNotFound(false)} />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-8 text-center">
+              <div className="bg-amber-50 p-4 rounded-full w-fit mx-auto mb-4 border border-amber-100 text-amber-600">
+                <AlertCircle className="h-8 w-8" />
               </div>
               <h3 className="text-xl font-bold text-gray-900">未找到资产</h3>
-              <p className="text-sm text-gray-500 mt-2 mb-6">
-                识别码: <span className="font-mono font-bold text-gray-800">{scanResult}</span><br/>
-                该编码未在资产数据库中找到。
-              </p>
+              <p className="text-sm text-gray-500 mt-2 mb-6">数据库中未匹配到此编码。您可以手动修正识别结果后重试。</p>
               
-              <div className="space-y-3">
-                <button 
-                  onClick={handleManualSearch}
-                  className="w-full py-3 bg-indigo-50 text-indigo-700 rounded-xl font-bold flex items-center justify-center gap-2"
-                  type="button"
-                >
-                  <Search className="h-4 w-4" />
-                  以此内容手动搜索
-                </button>
-                
-                <button 
-                  onClick={() => navigate(`/assets/new?code=${scanResult}`)}
-                  className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg"
-                  type="button"
-                >
-                  <Plus className="h-4 w-4" />
-                  以此编码新增资产
-                </button>
-                
-                <button 
-                  onClick={() => {
-                    setNotFound(false);
-                    setScanResult(null);
-                    startScanner();
-                  }}
-                  className="w-full py-2 text-gray-400 text-sm font-medium"
-                  type="button"
-                >
-                  取消并重新扫码
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {error && (
-        <AnimatePresence>
-          <motion.div 
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-700"
-          >
-            <AlertCircle className="h-5 w-5" />
-            <p className="text-sm flex-1">{error}</p>
-            <button onClick={startScanner} className="underline text-xs font-bold" type="button">点击重试</button>
-          </motion.div>
-        </AnimatePresence>
-      )}
-
-      {/* Settings Modal */}
-      <AnimatePresence>
-        {showSettings && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-              onClick={() => setShowSettings(false)}
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 overflow-hidden"
-            >
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-bold text-gray-900">扫码器设置</h3>
-                <button onClick={() => setShowSettings(false)} className="text-gray-400" type="button">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-3">支持的条码格式</label>
-                  <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto px-1">
-                    {SUPPORTED_FORMATS_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => {
-                          const newFormats = settings.formats.includes(option.value)
-                            ? settings.formats.filter(f => f !== option.value)
-                            : [...settings.formats, option.value];
-                          setSettings({ ...settings, formats: newFormats });
-                        }}
-                        className={cn(
-                          "flex items-center justify-between px-4 py-2 rounded-xl text-sm transition-all border",
-                          settings.formats.includes(option.value)
-                            ? "bg-indigo-50 border-indigo-200 text-indigo-700"
-                            : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
-                        )}
-                      >
-                        {option.label}
-                        {settings.formats.includes(option.value) && <Check className="h-4 w-4" />}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-2">提示：锁定特定格式可以显著提高识别效率</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-3">解码引擎</label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSettings({ ...settings, engine: 'default' })}
-                      className={cn(
-                        "flex-1 py-2 px-3 rounded-xl text-xs font-medium border transition-all",
-                        settings.engine === 'default'
-                          ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200"
-                          : "bg-gray-50 border-gray-100 text-gray-600"
-                      )}
-                    >
-                      默认引擎 (Zxing)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSettings({ ...settings, engine: 'native' })}
-                      className={cn(
-                        "flex-1 py-2 px-3 rounded-xl text-xs font-medium border transition-all",
-                        settings.engine === 'native'
-                          ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200"
-                          : "bg-gray-50 border-gray-100 text-gray-600"
-                      )}
-                    >
-                      原生引擎 (Browser)
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-2">提示：原生引擎速度更快，但在某些设备上兼容性较差</p>
-                </div>
-
-                <div className="pt-2">
-                  <button 
-                    onClick={() => saveSettings(settings)}
-                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all active:scale-95"
-                    type="button"
-                  >
-                    保存并应用更改
+              <div className="mb-8 text-left">
+                <label className="block text-[11px] font-bold text-indigo-500 mb-1.5 ml-1">识别结果 (点击修改)</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" value={editableResult} onChange={(e) => setEditableResult(e.target.value)}
+                    className="flex-1 px-4 py-3.5 bg-gray-50 border-2 border-gray-100 rounded-2xl text-sm font-mono font-bold focus:border-indigo-500 focus:bg-white transition-all outline-none"
+                    placeholder="输入编码"
+                  />
+                  <button onClick={handleRetrySearch} disabled={!editableResult} className="px-4.5 bg-indigo-600 text-white rounded-2xl shadow-lg shadow-indigo-100 active:scale-90 transition-all disabled:opacity-50">
+                    <RefreshCcw className="h-5 w-5" />
                   </button>
                 </div>
               </div>
+
+              <div className="space-y-3">
+                <button 
+                  onClick={() => navigate(`/assets/new?code=${editableResult}`, { state: { ocrData: (window as any).lastOcrData } })}
+                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-xl shadow-indigo-100"
+                >
+                  <Plus className="h-5 w-5" />以此编码新增资产
+                </button>
+                <button onClick={handleManualSearch} className="w-full py-3.5 text-indigo-700 font-bold text-sm bg-indigo-50 rounded-2xl">
+                  手动搜索资产列表
+                </button>
+                <button onClick={() => setNotFound(false)} className="w-full py-2 text-gray-400 text-sm font-medium mt-2">
+                  返回
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+
+      {/* Settings Modal (Simplified) */}
+      <AnimatePresence>
+        {showSettings && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowSettings(false)} />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-bold text-gray-900">核查设置</h3>
+                <button onClick={() => setShowSettings(false)} className="text-gray-400"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-3">解码引擎</label>
+                  <div className="flex gap-2">
+                    {['default', 'native'].map((e) => (
+                      <button
+                        key={e} type="button" onClick={() => setSettings({ ...settings, engine: e as any })}
+                        className={cn(
+                          "flex-1 py-2.5 rounded-xl text-xs font-bold border transition-all",
+                          settings.engine === e ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-gray-50 border-gray-100 text-gray-600"
+                        )}
+                      >
+                        {e === 'default' ? 'Zxing (全能)' : 'Native (快速)'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={() => saveSettings(settings)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all">
+                  保存并应用
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <style>{`
+        @keyframes scan { 0% { top: 0; } 50% { top: 100%; } 100% { top: 0; } }
+      `}</style>
     </div>
   );
 }

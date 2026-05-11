@@ -84,6 +84,29 @@ router.get('/:idOrCode', authenticate, (req, res) => {
   }
 });
 
+// GET metadata options for autocomplete
+router.get('/metadata/options', authenticate, (req, res) => {
+  try {
+    // Get options from master tables for orgs and depts
+    const orgsMaster = db.prepare("SELECT DISTINCT name FROM organizations WHERE name IS NOT NULL AND name != ''").all() as any[];
+    const deptsMaster = db.prepare("SELECT DISTINCT name FROM departments WHERE name IS NOT NULL AND name != ''").all() as any[];
+    
+    const locations = db.prepare("SELECT DISTINCT location_name FROM assets WHERE location_name IS NOT NULL AND location_name != ''").all() as any[];
+    const models = db.prepare("SELECT DISTINCT model FROM assets WHERE model IS NOT NULL AND model != ''").all() as any[];
+
+    res.json({
+      organizations: orgsMaster.map(o => o.name).sort(),
+      departments: deptsMaster.map(d => d.name).sort(),
+      locations: locations.map(l => l.location_name).sort(),
+      models: models.map(m => m.model).sort(),
+      currentModel: process.env.GEMINI_MODEL || "gemini-1.5-flash"
+    });
+  } catch (err) {
+    console.error('Metadata options error:', err);
+    res.status(500).json({ message: '获取选项失败' });
+  }
+});
+
 // POST new asset (Admin Only)
 router.post('/', authenticate, requireAdmin, upload.single('image'), (req: AuthRequest, res) => {
   const { org_name, dept_name, asset_code, card_code, barcode, name, user, status, location_name, remarks, model } = req.body;
@@ -198,10 +221,11 @@ router.delete('/:id', authenticate, requireAdmin, (req: AuthRequest, res) => {
     const existing = db.prepare('SELECT * FROM assets WHERE id = ?').get(id);
     if (!existing) return res.status(404).json({ message: '资产不存在' });
 
-    db.prepare('DELETE FROM assets WHERE id = ?').run(id);
     logChange(Number(id), req.user!.id, 'DELETE', existing, null);
+    db.prepare('DELETE FROM assets WHERE id = ?').run(id);
     res.json({ message: '删除成功' });
   } catch (err) {
+    console.error('Delete asset error:', err);
     res.status(500).json({ message: '删除失败' });
   }
 });

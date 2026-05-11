@@ -4,6 +4,7 @@ import fs from 'fs';
 
 const dbPath = path.join(process.cwd(), 'database.sqlite');
 const db = new Database(dbPath);
+db.pragma('foreign_keys = ON');
 
 // Create tables
 db.exec(`
@@ -50,7 +51,7 @@ db.exec(`
     location_name TEXT,
     remarks TEXT,
     model TEXT,
-    status TEXT CHECK(status IN ('正常', '报废', '维修', '已盘点', '待盘点')) NOT NULL DEFAULT '待盘点',
+    status TEXT CHECK(status IN ('正常', '报废', '维修', '已盘点', '待盘点', '损坏')) NOT NULL DEFAULT '待盘点',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (org_id) REFERENCES organizations(id),
@@ -85,8 +86,8 @@ db.exec(`
     before_data TEXT, -- JSON snapshot
     after_data TEXT,  -- JSON snapshot
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (asset_id) REFERENCES assets(id),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
   );
 `);
 
