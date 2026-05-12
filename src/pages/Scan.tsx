@@ -528,36 +528,83 @@ export default function ScanPage() {
         )}
       </AnimatePresence>
 
-      {/* Settings Modal (Simplified) */}
+      {/* Settings Modal */}
       <AnimatePresence>
         {showSettings && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowSettings(false)} />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6">
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-7 overflow-hidden">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-bold text-gray-900">核查设置</h3>
-                <button onClick={() => setShowSettings(false)} className="text-gray-400"><X className="h-5 w-5" /></button>
+                <h3 className="text-xl font-bold text-gray-900">核查设置</h3>
+                <button onClick={() => setShowSettings(false)} className="text-gray-400 p-2 hover:bg-gray-100 rounded-full transition-colors" type="button">
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <div className="space-y-6">
+
+              <div className="space-y-7">
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-3">解码引擎</label>
-                  <div className="flex gap-2">
-                    {['default', 'native'].map((e) => (
+                  <label className="block text-sm font-bold text-gray-700 mb-3 ml-1">识别条码格式</label>
+                  <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto px-1 custom-scrollbar">
+                    {SUPPORTED_FORMATS_OPTIONS.map((option) => (
                       <button
-                        key={e} type="button" onClick={() => setSettings({ ...settings, engine: e as any })}
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          const newFormats = settings.formats.includes(option.value)
+                            ? settings.formats.filter(f => f !== option.value)
+                            : [...settings.formats, option.value];
+                          setSettings({ ...settings, formats: newFormats });
+                        }}
                         className={cn(
-                          "flex-1 py-2.5 rounded-xl text-xs font-bold border transition-all",
-                          settings.engine === e ? "bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-gray-50 border-gray-100 text-gray-600"
+                          "flex items-center justify-between px-4 py-2.5 rounded-2xl text-sm font-medium transition-all border-2",
+                          settings.formats.includes(option.value)
+                            ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                            : "bg-gray-50 border-gray-100 text-gray-600 hover:bg-gray-100"
                         )}
                       >
-                        {e === 'default' ? 'Zxing (全能)' : 'Native (快速)'}
+                        {option.label}
+                        {settings.formats.includes(option.value) && <Check className="h-4 w-4 stroke-[3]" />}
                       </button>
                     ))}
                   </div>
+                  <p className="text-[10px] text-gray-400 mt-2.5 ml-1">🔒 提示：只勾选目前需要识别的格式，可极大提高识别率和防误触</p>
                 </div>
-                <button onClick={() => saveSettings(settings)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all">
-                  保存并应用
-                </button>
+
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-3 ml-1">解码引擎</label>
+                  <div className="flex gap-2">
+                    {[
+                      { id: 'default', label: 'Zxing (全能模式)', sub: '兼容性最好' },
+                      { id: 'native', label: 'Native (极速模式)', sub: '浏览器原生' }
+                    ].map((engine) => (
+                      <button
+                        key={engine.id}
+                        type="button"
+                        onClick={() => setSettings({ ...settings, engine: engine.id as any })}
+                        className={cn(
+                          "flex-1 py-3 px-2 rounded-2xl border-2 transition-all flex flex-col items-center gap-0.5",
+                          settings.engine === engine.id
+                            ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100"
+                            : "bg-gray-50 border-gray-100 text-gray-500"
+                        )}
+                      >
+                        <span className="text-[11px] font-bold">{engine.label}</span>
+                        <span className={cn("text-[9px] opacity-70", settings.engine === engine.id ? "text-white" : "text-gray-400")}>{engine.sub}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-2.5 ml-1">💡 推荐：优先尝试 Native 模式，失效时切换 Zxing</p>
+                </div>
+
+                <div className="pt-2">
+                  <button 
+                    onClick={() => saveSettings(settings)} 
+                    className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all"
+                    type="button"
+                  >
+                    保存并重启扫描器
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

@@ -1,8 +1,9 @@
-# Tasks: Restore Scan Page Settings
+# Tasks: Restore Scan Page Settings & Optimize Recognition
 
-- [ ] Analyze `src/pages/Scan.tsx` for missing UI elements in the settings modal. <!-- id: 0 -->
-- [ ] Implement format toggle logic in `Scan.tsx`. <!-- id: 1 -->
-- [ ] Add format selection grid to the settings modal JSX in `Scan.tsx`. <!-- id: 2 -->
-- [ ] Style the format selection UI for better usability on mobile. <!-- id: 3 -->
-- [ ] Verify that saving settings updates `localStorage` and restarts the scanner with new config. <!-- id: 4 -->
-- [ ] Run linter and build to ensure no regressions. <!-- id: 5 -->
+- [x] Restore full settings modal UI in `src/pages/Scan.tsx`. <!-- id: 0 -->
+    - [x] Add the "Supported Formats" section with the selection grid.
+    - [x] Improve labels and descriptions for formats and engines.
+- [x] Implement format toggle logic inside the Settings Modal JSX. <!-- id: 1 -->
+- [x] Ensure `settings.formats` is correctly updated and persisted to `localStorage`. <!-- id: 2 -->
+- [x] Verify that restarting the scanner with narrowed formats improves recognition speed. <!-- id: 3 -->
+- [x] Run linter and build to ensure no regressions. <!-- id: 4 -->
