@@ -89,6 +89,21 @@ db.exec(`
     FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
   );
+
+  CREATE TABLE IF NOT EXISTS transfer_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    from_dept_id INTEGER,
+    to_dept_id INTEGER NOT NULL,
+    requester_id INTEGER NOT NULL,
+    reason TEXT,
+    status TEXT CHECK(status IN ('pending', 'approved', 'rejected')) NOT NULL DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (asset_id) REFERENCES assets(id),
+    FOREIGN KEY (from_dept_id) REFERENCES departments(id),
+    FOREIGN KEY (to_dept_id) REFERENCES departments(id),
+    FOREIGN KEY (requester_id) REFERENCES users(id)
+  );
 `);
 
 import bcrypt from 'bcryptjs';

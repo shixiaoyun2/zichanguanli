@@ -18,7 +18,7 @@ router.get('/', authenticate, requireAdmin, (req: AuthRequest, res: Response) =>
 // Get departments list for reference
 router.get('/departments', authenticate, requireAdmin, (req, res) => {
   try {
-    const departments = db.prepare('SELECT name FROM departments ORDER BY name ASC').all();
+    const departments = db.prepare('SELECT id, name FROM departments ORDER BY name ASC').all();
     res.json(departments);
   } catch (err) {
     res.status(500).json({ message: '获取部门失败' });

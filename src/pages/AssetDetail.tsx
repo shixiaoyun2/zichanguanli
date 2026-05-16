@@ -33,7 +33,7 @@ export default function AssetDetailsPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [useAI, setUseAI] = useState(false);
-  const [options, setOptions] = useState<{ organizations: string[], departments: string[], locations: string[], models: string[], currentModel?: string }>({
+  const [options, setOptions] = useState<{ organizations: string[], departments: {id: number, name: string}[], locations: string[], models: string[], currentModel?: string }>({
     organizations: [],
     departments: [],
     locations: [],
@@ -70,14 +70,20 @@ export default function AssetDetailsPage() {
   });
 
   // Permissions logic
-  const userDepts = (user?.departments || '').split(',').map(d => d.trim()).filter(Boolean);
-  const isOperator = user?.role === 'operator';
-  const hasDeptAccess = !isOperator || userDepts.includes(formData.dept_name);
-  const canEdit = user?.role === 'admin' || (isOperator && !isNew && hasDeptAccess);
+  const isOperator = user?.role === 'admin' ? false : true;
+  const userDeptIds = user?.deptIds || [];
+  const deptId = (formData as any).dept_id;
+  const hasDeptAccess = user?.role === 'admin' || (deptId !== undefined && deptId !== null && userDeptIds.includes(Number(deptId)));
+  const canEdit = user?.role === 'admin' || (user?.role === 'operator' && !isNew && hasDeptAccess);
+  
+  const currentDeptName = (formData as any).dept_name || 
+    (options.departments.find(d => Number(d.id) === Number(deptId))?.name) || 
+    (deptId ? `部门 ID: ${deptId}` : '未公开');
+
   const permissionMessage = isOperator && isNew 
     ? '操作员禁止录入新资产，请联系管理员。' 
-    : isOperator && !hasDeptAccess 
-      ? `您无权编辑隶属于“${formData.dept_name || '未定义'}”的资产。您的管辖范围：${userDepts.join(', ') || '无'}`
+    : isOperator && !hasDeptAccess && !isNew && !(formData as any).limited
+      ? `您无权编辑此资产。当前归属：${currentDeptName}`
       : '';
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -274,8 +280,8 @@ export default function AssetDetailsPage() {
         />
         {listId && (
           <datalist id={listId}>
-            {(options as any)[listId.replace('_list', '')]?.map((opt: string, i: number) => (
-              <option key={`${opt}-${i}`} value={opt} />
+            {(options as any)[listId.replace('_list', '')]?.map((opt: any, i: number) => (
+              <option key={i} value={typeof opt === 'object' ? opt.name : opt} />
             ))}
           </datalist>
         )}
@@ -417,10 +423,161 @@ export default function AssetDetailsPage() {
     }
   };
 
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [transferReason, setTransferReason] = useState('');
+  const [targetDeptId, setTargetDeptId] = useState('');
+
+  const handleTransferRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const res = await fetch('/api/transfers', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}` 
+        },
+        body: JSON.stringify({
+          asset_id: formData.id,
+          to_dept_id: targetDeptId,
+          reason: transferReason
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showModal('申请已提交', data.message, 'success');
+        setIsTransferModalOpen(false);
+        setTransferReason('');
+      } else {
+        showModal('提交失败', data.message, 'error');
+      }
+    } catch (err) {
+      showModal('网络错误', '操作超时，请稍后重试', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center py-20">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if ((formData as any).limited) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6 pt-10">
+        <button 
+          onClick={() => navigate(-1)}
+          className="inline-flex items-center text-sm font-medium text-gray-500 hover:text-gray-700"
+        >
+          <ArrowLeft className="h-4 w-4 mr-1" />
+          返回
+        </button>
+
+        <div className="bg-white p-8 rounded-[2rem] shadow-xl border border-amber-100 text-center space-y-6">
+          <div className="bg-amber-50 p-4 rounded-full w-fit mx-auto border border-amber-100 text-amber-600">
+            <Shield className="h-12 w-12" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">权限受限</h2>
+            <p className="text-gray-500 mt-2">
+              您正在查看资产 <span className="font-bold text-indigo-600">{(formData as any).name}</span> ({ (formData as any).asset_code })
+            </p>
+            <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 bg-gray-100 rounded-full text-xs text-gray-600 font-medium">
+              当前归属：{ (formData as any).dept_name || options.departments.find(d => d.id === Number((formData as any).dept_id))?.name || '未公开' }
+            </div>
+          </div>
+          
+          <div className="p-4 bg-amber-50/50 rounded-2xl text-sm text-amber-800 border border-amber-100">
+            { (formData as any).message }
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-4">
+             <button 
+              onClick={() => navigate(-1)}
+              className="flex-1 py-3.5 bg-gray-50 text-gray-600 rounded-2xl font-bold hover:bg-gray-100 transition-all border border-gray-200"
+            >
+              稍后再说
+            </button>
+            <button 
+              onClick={() => {
+                if (options.departments.length > 0) {
+                  setTargetDeptId(String(options.departments[0].id));
+                }
+                setIsTransferModalOpen(true);
+              }}
+              className="flex-1 py-3.5 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+            >
+              申请调拨至本部门
+            </button>
+          </div>
+        </div>
+
+        {/* Transfer Modal */}
+        <AnimatePresence>
+          {isTransferModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                onClick={() => setIsTransferModalOpen(false)}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-6"
+              >
+                <h3 className="text-lg font-bold text-gray-900 border-b pb-3 mb-4">申请跨部门调拨</h3>
+                <form onSubmit={handleTransferRequest} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">目标接收部门</label>
+                    <select 
+                      required
+                      value={targetDeptId}
+                      onChange={(e) => setTargetDeptId(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/10"
+                    >
+                      {options.departments.map(d => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">调拨事由</label>
+                    <textarea 
+                      required
+                      value={transferReason}
+                      onChange={(e) => setTransferReason(e.target.value)}
+                      rows={3}
+                      placeholder="请向管理员说明调拨原因..."
+                      className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/10 resize-none"
+                    />
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button type="button" onClick={() => setIsTransferModalOpen(false)} className="flex-1 py-3 text-sm text-gray-500 font-bold">取消</button>
+                    <button 
+                      type="submit" 
+                      disabled={saving}
+                      className="flex-1 bg-indigo-600 text-white py-3 rounded-xl text-sm font-bold shadow-md hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {saving ? '正在提交...' : '确认申请'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <MessageModal 
+          isOpen={modal.isOpen} 
+          onClose={() => setModal(prev => ({ ...prev, isOpen: false }))}
+          title={modal.title}
+          message={modal.message}
+          type={modal.type}
+        />
       </div>
     );
   }

@@ -11,7 +11,13 @@ import {
   Building,
   CheckCircle2,
   Users,
-  AlertCircle
+  AlertCircle,
+  PlusCircle,
+  Edit2,
+  Trash,
+  GitMerge,
+  Save,
+  Combine
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
@@ -22,13 +28,18 @@ interface UserData {
   id: number;
   username: string;
   role: 'admin' | 'operator';
-  departments: string; // Comma separated
+  departments: string; // Comma separated IDs
+}
+
+interface Department {
+  id: number;
+  name: string;
 }
 
 export default function PeopleManagementPage() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<UserData[]>([]);
-  const [departments, setDepartments] = useState<string[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
@@ -38,8 +49,15 @@ export default function PeopleManagementPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'admin' | 'operator'>('operator');
-  const [selectedDepts, setSelectedDepts] = useState<string[]>([]);
+  const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
   const [newPassword, setNewPassword] = useState('');
+  
+  // Dept management states
+  const [isDeptAdding, setIsDeptAdding] = useState(false);
+  const [deptNameInput, setDeptNameInput] = useState('');
+  const [deptRenamingId, setDeptRenamingId] = useState<number | null>(null);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeNewName, setMergeNewName] = useState('');
 
   const [modal, setModal] = useState<{ isOpen: boolean; title: string; message: string; type: 'success' | 'error' | 'warning' | 'info' }>({
     isOpen: false,
@@ -68,15 +86,111 @@ export default function PeopleManagementPage() {
 
   const fetchDepts = async () => {
     try {
-      const res = await fetch('/api/users/departments', {
+      const res = await fetch('/api/departments', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
       if (res.ok) {
         const data = await res.json();
-        setDepartments(data.map((d: any) => d.name));
+        setDepartments(data);
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleCreateDept = async () => {
+    if (!deptNameInput.trim()) return;
+    try {
+      const res = await fetch('/api/departments', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}` 
+        },
+        body: JSON.stringify({ name: deptNameInput })
+      });
+      if (res.ok) {
+        setDeptNameInput('');
+        setIsDeptAdding(false);
+        fetchDepts();
+      } else {
+        const data = await res.json();
+        showModal('添加失败', data.message, 'error');
+      }
+    } catch (err) {
+      showModal('网络错误', '操作失败', 'error');
+    }
+  };
+
+  const handleRenameDept = async (id: number) => {
+    if (!deptNameInput.trim()) return;
+    try {
+      const res = await fetch(`/api/departments/${id}`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}` 
+        },
+        body: JSON.stringify({ name: deptNameInput })
+      });
+      if (res.ok) {
+        setDeptNameInput('');
+        setDeptRenamingId(null);
+        fetchDepts();
+      } else {
+        const data = await res.json();
+        showModal('更名失败', data.message, 'error');
+      }
+    } catch (err) {
+      showModal('网络错误', '操作失败', 'error');
+    }
+  };
+
+  const handleDeleteDept = async (id: number) => {
+    if (!confirm('确定要删除该部门吗？')) return;
+    try {
+      const res = await fetch(`/api/departments/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        fetchDepts();
+      } else {
+        const data = await res.json();
+        showModal('删除失败', data.message, 'error');
+      }
+    } catch (err) {
+      showModal('网络错误', '操作失败', 'error');
+    }
+  };
+
+  const handleMergeDepts = async () => {
+    if (!mergeNewName.trim()) return;
+    try {
+      const res = await fetch('/api/departments/merge', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}` 
+        },
+        body: JSON.stringify({ 
+          sourceIds: selectedDeptIds.map(Number),
+          newName: mergeNewName
+        })
+      });
+      if (res.ok) {
+        setMergeNewName('');
+        setIsMergeModalOpen(false);
+        setSelectedDeptIds([]);
+        fetchDepts();
+        fetchUsers();
+        showModal('合并成功', '部门及资产关联已成功合并', 'success');
+      } else {
+        const data = await res.json();
+        showModal('合并失败', data.message, 'error');
+      }
+    } catch (err) {
+      showModal('网络错误', '无法完成合并', 'error');
     }
   };
 
@@ -88,7 +202,7 @@ export default function PeopleManagementPage() {
     setEditingUser(user);
     setUsername(user.username);
     setRole(user.role);
-    setSelectedDepts(user.departments ? user.departments.split(',') : []);
+    setSelectedDeptIds(user.departments ? user.departments.split(',') : []);
     setIsModalOpen(true);
   };
 
@@ -97,7 +211,7 @@ export default function PeopleManagementPage() {
     setUsername('');
     setPassword('');
     setRole('operator');
-    setSelectedDepts([]);
+    setSelectedDeptIds([]);
     setIsModalOpen(true);
   };
 
@@ -107,8 +221,8 @@ export default function PeopleManagementPage() {
     const method = editingUser ? 'PUT' : 'POST';
     
     const body = editingUser 
-      ? { role, departments: selectedDepts.join(',') }
-      : { username, password, role, departments: selectedDepts.join(',') };
+      ? { role, departments: selectedDeptIds.join(',') }
+      : { username, password, role, departments: selectedDeptIds.join(',') };
 
     try {
       const res = await fetch(url, {
@@ -175,10 +289,14 @@ export default function PeopleManagementPage() {
     }
   };
 
-  const toggleDept = (dept: string) => {
-    setSelectedDepts(prev => 
-      prev.includes(dept) ? prev.filter(d => d !== dept) : [...prev, dept]
+  const toggleDept = (deptId: string) => {
+    setSelectedDeptIds(prev => 
+      prev.includes(deptId) ? prev.filter(id => id !== deptId) : [...prev, deptId]
     );
+  };
+
+  const getDeptName = (id: string) => {
+    return departments.find(d => String(d.id) === id)?.name || `Dept ${id}`;
   };
 
   return (
@@ -203,91 +321,170 @@ export default function PeopleManagementPage() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <table className="w-full text-left">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">用户名</th>
-                <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">角色</th>
-                <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">管辖部门</th>
-                <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {users.map((u) => (
-                <tr key={u.id} className="hover:bg-gray-50 transition-colors group">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center">
-                      <div className="h-8 w-8 bg-indigo-50 rounded-full flex items-center justify-center mr-3">
-                        <User className="h-4 w-4 text-indigo-600" />
+        <>
+          {/* Mobile Card View */}
+          <div className="grid grid-cols-1 gap-4 sm:hidden">
+            {users.map((u) => (
+              <div key={u.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex flex-col gap-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center">
+                    <div className="h-10 w-10 bg-indigo-50 rounded-xl flex items-center justify-center mr-3">
+                      <User className="h-5 w-5 text-indigo-600" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-900">{u.username}</span>
+                        {u.id === currentUser?.id && (
+                          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 text-[10px] rounded leading-none">自己</span>
+                        )}
                       </div>
-                      <span className="text-sm font-medium text-gray-900">{u.username}</span>
-                      {u.id === currentUser?.id && (
-                        <span className="ml-2 px-1.5 py-0.5 bg-gray-100 text-gray-500 text-[10px] rounded leading-none">自己</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm">
-                    {u.role === 'admin' ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                        <Shield className="h-3 w-3 mr-1" />
-                        管理员
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        操作员
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-wrap gap-1">
-                      {u.role === 'admin' ? (
-                        <span className="text-xs text-gray-400 italic">全系统权限</span>
-                      ) : u.departments ? (
-                        u.departments.split(',').map(d => (
-                          <span key={d} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded-full">
-                            {d}
+                      <div className="mt-1">
+                        {u.role === 'admin' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">
+                            <Shield className="h-3 w-3 mr-1" />
+                            管理员
                           </span>
-                        ))
-                      ) : (
-                        <span className="text-xs text-amber-500 font-medium">无管辖部门</span>
-                      )}
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                            操作员
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-2">
-                       <button 
-                        onClick={() => handleOpenEdit(u)}
-                        className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"
-                        title="编辑资料"
-                      >
-                        <User className="h-4 w-4" />
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setEditingUser(u);
-                          setIsResetModalOpen(true);
-                        }}
-                        className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
-                        title="重置密码"
-                      >
-                        <Key className="h-4 w-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(u.id)}
-                        disabled={u.id === currentUser?.id}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-30"
-                        title="删除账号"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
+                  </div>
+                  <div className="flex gap-1">
+                    <button 
+                      onClick={() => handleOpenEdit(u)}
+                      className="p-2 text-indigo-600 bg-indigo-50 rounded-lg active:scale-95 transition-transform"
+                    >
+                      <Edit2 className="h-4 w-4" />
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setEditingUser(u);
+                        setIsResetModalOpen(true);
+                      }}
+                      className="p-2 text-amber-600 bg-amber-50 rounded-lg active:scale-95 transition-transform"
+                    >
+                      <Key className="h-4 w-4" />
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(u.id)}
+                      disabled={u.id === currentUser?.id}
+                      className="p-2 text-red-600 bg-red-50 rounded-lg disabled:opacity-30 active:scale-95 transition-transform"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-gray-50">
+                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-2">管辖部门</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {u.role === 'admin' ? (
+                      <span className="text-xs text-gray-400 italic">全系统权限</span>
+                    ) : u.departments ? (
+                      u.departments.split(',').map(did => (
+                        <span key={did} className="px-2 py-1 bg-gray-50 text-gray-600 text-xs rounded-lg border border-gray-100">
+                          {getDeptName(did)}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-amber-500 font-medium">无管辖部门</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop Table View */}
+          <div className="hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">用户名</th>
+                  <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">角色</th>
+                  <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">管辖部门</th>
+                  <th className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider text-right">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {users.map((u) => (
+                  <tr key={u.id} className="hover:bg-gray-50 transition-colors group">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center">
+                        <div className="h-8 w-8 bg-indigo-50 rounded-full flex items-center justify-center mr-3">
+                          <User className="h-4 w-4 text-indigo-600" />
+                        </div>
+                        <span className="text-sm font-medium text-gray-900">{u.username}</span>
+                        {u.id === currentUser?.id && (
+                          <span className="ml-2 px-1.5 py-0.5 bg-gray-100 text-gray-500 text-[10px] rounded leading-none">自己</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      {u.role === 'admin' ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                          <Shield className="h-3 w-3 mr-1" />
+                          管理员
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          操作员
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap gap-1">
+                        {u.role === 'admin' ? (
+                          <span className="text-xs text-gray-400 italic">全系统权限</span>
+                        ) : u.departments ? (
+                          u.departments.split(',').map(did => (
+                            <span key={did} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded-full">
+                              {getDeptName(did)}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-xs text-amber-500 font-medium">无管辖部门</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end gap-2">
+                         <button 
+                          onClick={() => handleOpenEdit(u)}
+                          className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                          title="编辑资料"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setEditingUser(u);
+                            setIsResetModalOpen(true);
+                          }}
+                          className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
+                          title="重置密码"
+                        >
+                          <Key className="h-4 w-4" />
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(u.id)}
+                          disabled={u.id === currentUser?.id}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-30"
+                          title="删除账号"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Edit/Create Modal */}
@@ -374,30 +571,111 @@ export default function PeopleManagementPage() {
                   </div>
 
                   {role === 'operator' && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        管辖部门 (多选)
-                        <span className="text-[10px] text-gray-400 font-normal ml-2">勾选后该用户可编辑对应部门资产</span>
-                      </label>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                         <label className="block text-sm font-medium text-gray-700">
+                          管辖部门 (多选)
+                          <span className="text-[10px] text-gray-400 font-normal ml-2">勾选后该用户可编辑对应部门资产</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                           {selectedDeptIds.length >= 2 && (
+                             <button 
+                              type="button" 
+                              onClick={() => setIsMergeModalOpen(true)}
+                              className="inline-flex items-center text-[10px] bg-amber-50 text-amber-600 px-2 py-1 rounded font-bold hover:bg-amber-100"
+                            >
+                              <GitMerge className="h-3 w-3 mr-1" />
+                              合并选中
+                            </button>
+                           )}
+                           <button 
+                            type="button" 
+                            onClick={() => {
+                              setIsDeptAdding(true);
+                              setDeptNameInput('');
+                              setDeptRenamingId(null);
+                            }}
+                            className="text-indigo-600 hover:text-indigo-700 p-1"
+                            title="新增部门"
+                          >
+                            <PlusCircle className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      
                       <div className="border border-gray-200 rounded-xl overflow-hidden">
-                        <div className="max-h-48 overflow-y-auto divide-y divide-gray-50">
+                        {(isDeptAdding || deptRenamingId) && (
+                          <div className="p-3 bg-indigo-50/50 border-b border-indigo-100 flex gap-2">
+                             <input 
+                              type="text" 
+                              autoFocus
+                              placeholder={isDeptAdding ? "输入新部门名称..." : "输入新部门名称..."}
+                              value={deptNameInput}
+                              onChange={e => setDeptNameInput(e.target.value)}
+                              className="flex-1 px-3 py-1.5 text-sm bg-white border border-indigo-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/20"
+                             />
+                             <button 
+                              type="button" 
+                              onClick={isDeptAdding ? handleCreateDept : () => handleRenameDept(deptRenamingId!)}
+                              className="bg-indigo-600 text-white p-2 rounded-lg"
+                             >
+                               <Save className="h-4 w-4" />
+                             </button>
+                             <button 
+                              type="button" 
+                              onClick={() => {
+                                setIsDeptAdding(false);
+                                setDeptRenamingId(null);
+                              }}
+                              className="text-gray-400 p-2"
+                             >
+                               <X className="h-4 w-4" />
+                             </button>
+                          </div>
+                        )}
+                        <div className="max-h-60 overflow-y-auto divide-y divide-gray-50">
                           {departments.length === 0 ? (
                             <div className="p-4 text-center text-xs text-gray-400">
                               暂无部门数据，请在资产录入时新增部门
                             </div>
                           ) : (
-                            departments.map(dept => (
-                              <label key={dept} className="flex items-center px-4 py-2.5 hover:bg-gray-50 cursor-pointer">
-                                <input 
-                                  type="checkbox"
-                                  checked={selectedDepts.includes(dept)}
-                                  onChange={() => toggleDept(dept)}
-                                  className="h-4 w-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
-                                />
-                                <span className="ml-3 text-sm text-gray-700 flex-1">{dept}</span>
-                                {selectedDepts.includes(dept) && <CheckCircle2 className="h-4 w-4 text-indigo-600" />}
-                              </label>
-                            ))
+                            departments.map(dept => {
+                              const sId = String(dept.id);
+                              return (
+                                <div key={dept.id} className="flex items-center px-4 py-2 hover:bg-gray-50 group/item">
+                                  <label className="flex items-center flex-1 cursor-pointer py-1">
+                                    <input 
+                                      type="checkbox"
+                                      checked={selectedDeptIds.includes(sId)}
+                                      onChange={() => toggleDept(sId)}
+                                      className="h-4 w-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                                    />
+                                    <span className="ml-3 text-sm text-gray-700 flex-1">{dept.name}</span>
+                                    {selectedDeptIds.includes(sId) && <CheckCircle2 className="h-4 w-4 text-indigo-600" />}
+                                  </label>
+                                  <div className="hidden group-hover/item:flex items-center gap-1 ml-2">
+                                    <button 
+                                      type="button"
+                                      onClick={() => {
+                                        setDeptRenamingId(dept.id);
+                                        setDeptNameInput(dept.name);
+                                        setIsDeptAdding(false);
+                                      }}
+                                      className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-white rounded"
+                                    >
+                                      <Edit2 className="h-3 w-3" />
+                                    </button>
+                                    <button 
+                                      type="button"
+                                      onClick={() => handleDeleteDept(dept.id)}
+                                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-white rounded"
+                                    >
+                                      <Trash className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })
                           )}
                         </div>
                       </div>
@@ -468,6 +746,63 @@ export default function PeopleManagementPage() {
           </div>
         )}
       </AnimatePresence>
+      {/* Merge Departments Modal */}
+      <AnimatePresence>
+        {isMergeModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsMergeModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-6"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-3 bg-amber-50 rounded-2xl text-amber-600">
+                  <Combine className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">合并部门</h3>
+                  <p className="text-xs text-gray-500">将选中的 {selectedDeptIds.length} 个部门合并</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 mb-2 uppercase tracking-wider">新部门名称</label>
+                  <input 
+                    type="text" 
+                    required 
+                    autoFocus
+                    placeholder="请输入合并后的名称..."
+                    value={mergeNewName}
+                    onChange={e => setMergeNewName(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/10"
+                  />
+                  <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    注意：合并后原部门的所有资产将更新为新名称。
+                  </p>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button type="button" onClick={() => setIsMergeModalOpen(false)} className="flex-1 py-3 text-sm text-gray-500 font-bold">取消</button>
+                  <button 
+                    onClick={handleMergeDepts}
+                    disabled={!mergeNewName.trim()}
+                    className="flex-[2] bg-indigo-600 text-white py-3 rounded-xl text-sm font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    开始合并
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <MessageModal 
         isOpen={modal.isOpen} 
         onClose={() => setModal(prev => ({ ...prev, isOpen: false }))}

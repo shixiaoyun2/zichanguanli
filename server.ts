@@ -10,6 +10,8 @@ import logRoutes from './src/server/routes/logs.ts';
 import excelRoutes from './src/server/routes/excel.ts';
 import aiRoutes from './src/server/routes/ai.ts';
 import userRoutes from './src/server/routes/users.ts';
+import transferRoutes from './src/server/routes/transfers.ts';
+import departmentRoutes from './src/server/routes/departments.ts';
 
 dotenv.config();
 
@@ -41,6 +43,8 @@ async function startServer() {
   app.use('/api/excel', excelRoutes);
   app.use('/api/ai', aiRoutes);
   app.use('/api/users', userRoutes);
+  app.use('/api/transfers', transferRoutes);
+  app.use('/api/departments', departmentRoutes);
 
   // TODO: Add Auth, Assets, Log routes here in subsequent tasks
 

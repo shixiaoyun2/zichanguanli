@@ -31,11 +31,12 @@ function getOrCreateDept(name: string): number {
   return result.lastInsertRowid as number;
 }
 
-// EXPORT EXCEL (Admin Only)
-router.get('/export', authenticate, requireAdmin, (req, res) => {
-  console.log('[Excel Export] Starting export...');
+// EXPORT EXCEL
+router.get('/export', authenticate, (req: AuthRequest, res) => {
+  const user = req.user!;
+  console.log(`[Excel Export] Starting export for user: ${user.username}...`);
   try {
-    const assets = db.prepare(`
+    let sql = `
       SELECT 
         a.asset_code as "资产编码", 
         a.name as "资产名称", 
@@ -52,7 +53,20 @@ router.get('/export', authenticate, requireAdmin, (req, res) => {
       FROM assets a
       LEFT JOIN organizations o ON a.org_id = o.id
       LEFT JOIN departments d ON a.dept_id = d.id
-    `).all();
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (user.role === 'operator') {
+      const deptIds = user.deptIds || [];
+      if (deptIds.length === 0) {
+        return res.status(403).json({ message: '未分配部门，无法导出' });
+      }
+      sql += ` AND a.dept_id IN (${deptIds.map(() => '?').join(',')})`;
+      params.push(...deptIds);
+    }
+
+    const assets = db.prepare(sql).all(...params);
 
     console.log(`[Excel Export] Found ${assets.length} assets to export`);
 

@@ -30,8 +30,10 @@ function logChange(assetId: number, userId: number, action: string, before: any,
 }
 
 // GET all assets
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, (req: AuthRequest, res) => {
   const { search, dept, status } = req.query;
+  const user = req.user!;
+  
   let sql = `
     SELECT a.*, o.name as org_name, d.name as dept_name 
     FROM assets a
@@ -40,6 +42,17 @@ router.get('/', authenticate, (req, res) => {
     WHERE 1=1
   `;
   const params: any[] = [];
+
+  // RBAC isolation for operators
+  if (user.role !== 'admin') {
+    const deptIds = (user.deptIds || []).map(id => Number(id));
+    if (deptIds.length === 0) {
+      return res.json([]); // No departments assigned, no assets visible
+    }
+    const placeholders = deptIds.map(() => '?').join(',');
+    sql += ` AND a.dept_id IN (${placeholders})`;
+    params.push(...deptIds);
+  }
 
   if (search) {
     sql += ` AND (a.name LIKE ? OR a.asset_code LIKE ? OR a.barcode LIKE ? OR a.location_name LIKE ? OR a.model LIKE ?)`;
@@ -66,8 +79,10 @@ router.get('/', authenticate, (req, res) => {
 });
 
 // GET single asset by ID or code/barcode
-router.get('/:idOrCode', authenticate, (req, res) => {
+router.get('/:idOrCode', authenticate, (req: AuthRequest, res) => {
   const { idOrCode } = req.params;
+  const user = req.user!;
+  
   try {
     const asset = db.prepare(`
       SELECT a.*, o.name as org_name, d.name as dept_name 
@@ -78,6 +93,24 @@ router.get('/:idOrCode', authenticate, (req, res) => {
     `).get(idOrCode, idOrCode, idOrCode) as any;
 
     if (!asset) return res.status(404).json({ message: '资产不存在' });
+
+    // RBAC isolation check
+    if (user.role === 'operator') {
+      const deptIds = (user.deptIds || []).map(id => Number(id));
+      if (!deptIds.includes(Number(asset.dept_id))) {
+        // Limited visibility for scanning cross-department assets
+        return res.json({
+          id: asset.id,
+          asset_code: asset.asset_code,
+          name: asset.name,
+          dept_name: asset.dept_name,
+          dept_id: asset.dept_id,
+          limited: true,
+          message: '此资产属于其他部门，您目前无权直接盘点。您可以发起调拨申请。'
+        });
+      }
+    }
+
     res.json(asset);
   } catch (err) {
     res.status(500).json({ message: '查询资产失败' });
@@ -85,18 +118,30 @@ router.get('/:idOrCode', authenticate, (req, res) => {
 });
 
 // GET metadata options for autocomplete
-router.get('/metadata/options', authenticate, (req, res) => {
+router.get('/metadata/options', authenticate, (req: AuthRequest, res) => {
+  const user = req.user!;
   try {
     // Get options from master tables for orgs and depts
     const orgsMaster = db.prepare("SELECT DISTINCT name FROM organizations WHERE name IS NOT NULL AND name != ''").all() as any[];
-    const deptsMaster = db.prepare("SELECT DISTINCT name FROM departments WHERE name IS NOT NULL AND name != ''").all() as any[];
+    
+    let deptsMaster;
+    if (user.role === 'admin') {
+      deptsMaster = db.prepare("SELECT DISTINCT id, name FROM departments WHERE name IS NOT NULL AND name != ''").all() as any[];
+    } else {
+      const deptIds = user.deptIds || [];
+      if (deptIds.length > 0) {
+        deptsMaster = db.prepare(`SELECT id, name FROM departments WHERE id IN (${deptIds.map(() => '?').join(',')})`).all(...deptIds) as any[];
+      } else {
+        deptsMaster = [];
+      }
+    }
     
     const locations = db.prepare("SELECT DISTINCT location_name FROM assets WHERE location_name IS NOT NULL AND location_name != ''").all() as any[];
     const models = db.prepare("SELECT DISTINCT model FROM assets WHERE model IS NOT NULL AND model != ''").all() as any[];
 
     res.json({
       organizations: orgsMaster.map(o => o.name).sort(),
-      departments: deptsMaster.map(d => d.name).sort(),
+      departments: deptsMaster.sort((a, b) => a.name.localeCompare(b.name)),
       locations: locations.map(l => l.location_name).sort(),
       models: models.map(m => m.model).sort(),
       currentModel: process.env.GEMINI_MODEL || "gemini-1.5-flash"
@@ -157,11 +202,9 @@ router.patch('/:id', authenticate, upload.single('image'), (req: AuthRequest, re
     }
 
     if (req.user?.role === 'operator') {
-      const userDepts = (req.user.departments || '').split(',').map(d => d.trim()).filter(Boolean);
-      const assetDept = existing.dept_name || '';
-      
-      if (!userDepts.includes(assetDept)) {
-        return res.status(403).json({ message: `您无权编辑隶属于“${assetDept}”的资产。您的管辖范围：${userDepts.join(', ') || '无'}` });
+      const deptIds = (req.user.deptIds || []).map(id => Number(id));
+      if (!deptIds.includes(Number(existing.dept_id))) {
+        return res.status(403).json({ message: `您无权编辑此资产。此资产隶属于“${existing.dept_name}”。` });
       }
     }
 

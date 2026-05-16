@@ -4,17 +4,30 @@ import { authenticate, AuthRequest, requireAdmin } from '../middleware/auth.ts';
 
 const router = Router();
 
-// GET all logs (Admin only)
-router.get('/', authenticate, requireAdmin, (req, res) => {
+// GET all logs
+router.get('/', authenticate, (req: AuthRequest, res) => {
+  const user = req.user!;
   try {
-    const logs = db.prepare(`
+    let sql = `
       SELECT l.*, u.username, a.name as asset_name, a.asset_code
       FROM inventory_logs l
       LEFT JOIN users u ON l.user_id = u.id
       LEFT JOIN assets a ON l.asset_id = a.id
-      ORDER BY l.timestamp DESC
-      LIMIT 100
-    `).all();
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (user.role !== 'admin') {
+      const deptIds = (user.deptIds || []).map(id => Number(id));
+      if (deptIds.length === 0) return res.json([]);
+      const placeholders = deptIds.map(() => '?').join(',');
+      sql += ` AND a.dept_id IN (${placeholders})`;
+      params.push(...deptIds);
+    }
+
+    sql += ` ORDER BY l.timestamp DESC LIMIT 100`;
+    
+    const logs = db.prepare(sql).all(...params);
     res.json(logs);
   } catch (err) {
     res.status(500).json({ message: '获取日志失败' });
@@ -22,16 +35,27 @@ router.get('/', authenticate, requireAdmin, (req, res) => {
 });
 
 // GET log detail
-router.get('/:id', authenticate, requireAdmin, (req, res) => {
+router.get('/:id', authenticate, (req: AuthRequest, res) => {
   const { id } = req.params;
+  const user = req.user!;
   try {
     const log = db.prepare(`
-      SELECT l.*, u.username, a.name as asset_name, a.asset_code
+      SELECT l.*, u.username, a.name as asset_name, a.asset_code, a.dept_id
       FROM inventory_logs l
       LEFT JOIN users u ON l.user_id = u.id
       LEFT JOIN assets a ON l.asset_id = a.id
       WHERE l.id = ?
-    `).get(id);
+    `).get(id) as any;
+
+    if (!log) return res.status(404).json({ message: '日志不存在' });
+
+    if (user.role !== 'admin') {
+      const deptIds = (user.deptIds || []).map(id => Number(id));
+      if (!deptIds.includes(Number(log.dept_id))) {
+        return res.status(403).json({ message: '您无权查看该日志' });
+      }
+    }
+
     res.json(log);
   } catch (err) {
     res.status(500).json({ message: '获取日志详情失败' });
@@ -61,16 +85,32 @@ router.post('/rollback/:id', authenticate, requireAdmin, (req: AuthRequest, res)
       // Re-insert logic would go here
       return res.status(501).json({ message: '删除撤回功能开发中' });
     } else {
-      // UPDATE rollback
-      if (!before) return res.status(400).json({ message: '无历史数据可回滚' });
+      // UPDATE / TRANSFER rollback
+      if (!before || Object.keys(before).length === 0) {
+        return res.status(400).json({ message: '无历史数据可回滚' });
+      }
+
+      const allowedFields = [
+        'org_id', 'dept_id', 'asset_code', 'card_code', 'barcode', 
+        'name', 'user', 'status', 'image_path', 'location_name', 
+        'remarks', 'model'
+      ];
+
+      const fieldsToUpdate = Object.keys(before).filter(k => allowedFields.includes(k));
+      
+      if (fieldsToUpdate.length === 0) {
+        return res.status(400).json({ message: '该记录无有效可回滚字段' });
+      }
+
+      const setClause = fieldsToUpdate.map(f => `${f} = ?`).join(', ');
+      const params = fieldsToUpdate.map(f => before[f]);
+      params.push(assetId);
 
       db.prepare(`
         UPDATE assets SET 
-          org_id = ?, dept_id = ?, asset_code = ?, card_code = ?, barcode = ?, 
-          name = ?, user = ?, status = ?, image_path = ?, updated_at = CURRENT_TIMESTAMP
+          ${setClause}, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(before.org_id, before.dept_id, before.asset_code, before.card_code, before.barcode,
-             before.name, before.user, before.status, before.image_path, assetId);
+      `).run(...params);
     }
 
     const current = db.prepare('SELECT * FROM assets WHERE id = ?').get(assetId);

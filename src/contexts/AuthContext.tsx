@@ -5,6 +5,7 @@ interface User {
   username: string;
   role: 'admin' | 'operator';
   departments?: string;
+  deptIds?: number[];
 }
 
 interface AuthContextType {
@@ -31,7 +32,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
           if (res.ok) {
             const data = await res.json();
-            setUser(data.user);
+            const userData = data.user;
+            const userWithIds = {
+              ...userData,
+              deptIds: userData.departments ? userData.departments.split(',').map((id: string) => parseInt(id.trim())).filter((id: number) => !isNaN(id)) : []
+            };
+            setUser(userWithIds);
           } else {
             logout();
           }
@@ -48,11 +54,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = (newToken: string, newUser: User) => {
     localStorage.setItem('token', newToken);
     setToken(newToken);
-    setUser(newUser);
+    const userWithIds = {
+      ...newUser,
+      deptIds: newUser.departments ? newUser.departments.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id)) : []
+    };
+    setUser(userWithIds);
   };
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('assets_cache');
     setToken(null);
     setUser(null);
   };
